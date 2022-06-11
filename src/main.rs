@@ -1,10 +1,9 @@
-use anyhow::Result;
-use std::io::prelude::*;
+use std::io::{prelude::*, Error as IoError};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
 use std::time::Duration;
 
-fn main() -> Result<()> {
+fn main() -> Result<(), HttpError> {
     let listener = TcpListener::bind("0.0.0.0:8080")?;
 
     for stream in listener.incoming() {
@@ -15,7 +14,18 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn handle_connection(mut stream: TcpStream) -> Result<()> {
+#[derive(Debug)]
+enum HttpError {
+    IO(IoError),
+}
+
+impl From<IoError> for HttpError {
+    fn from(err: IoError) -> HttpError {
+        HttpError::IO(err)
+    }
+}
+
+fn handle_connection(mut stream: TcpStream) -> Result<(), HttpError> {
     let mut buffer = [0; 1024];
 
     stream.read(&mut buffer)?;
