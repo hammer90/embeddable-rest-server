@@ -23,13 +23,12 @@ fn handle_connection(mut stream: TcpStream) -> Result<()> {
     println!("Request: \n{}", String::from_utf8_lossy(&buffer[..]));
 
     let msgs = [
-        "Hello",
-        "World",
-        "I'm",
-        "chunked",
-        "and",
-        "I'm",
-        "looooooooong!",
+        "Hello\r\n",
+        "World\r\n",
+        "I'm\r\n",
+        "chunked\r\n",
+        "and\r\n",
+        "looooooooong!\r\n",
     ];
     let start = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
 
@@ -37,7 +36,7 @@ fn handle_connection(mut stream: TcpStream) -> Result<()> {
     stream.flush()?;
 
     for msg in msgs {
-        let chunk = format!("{:x}\r\n{}\r\n\r\n", msg.len() + 2, msg);
+        let chunk = format!("{:x}\r\n{}\r\n", msg.len(), msg);
         println!("{}", chunk);
         stream.write(chunk.as_bytes())?;
         stream.flush()?;
