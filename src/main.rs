@@ -1,60 +1,42 @@
-use std::io::{prelude::*, Error as IoError};
-use std::net::{TcpListener, TcpStream};
-use std::thread;
-use std::time::Duration;
+mod server;
+
+use server::{HttpError, Response, RestServer};
+
+fn empty(_: Vec<u8>) -> Response {
+    Response {
+        status: 204,
+        data: |_| -> Option<Vec<u8>> { None },
+    }
+}
+
+fn bad(_: Vec<u8>) -> Response {
+    Response {
+        status: 400,
+        data: |_| -> Option<Vec<u8>> { None },
+    }
+}
+
+fn greeting(_: Vec<u8>) -> Response {
+    Response {
+        status: 200,
+        data: |i| -> Option<Vec<u8>> {
+            match i {
+                0 => Some("Hello\r\n".into()),
+                1 => Some("World\r\n".into()),
+                2 => None,
+                _ => None,
+            }
+        },
+    }
+}
 
 fn main() -> Result<(), HttpError> {
-    let listener = TcpListener::bind("0.0.0.0:8080")?;
+    let server = RestServer::new("0.0.0.0:8080")?
+        .get("/", empty)?
+        .get("/bad", bad)?
+        .get("/greeting", greeting)?;
 
-    for stream in listener.incoming() {
-        if let Ok(stream) = stream {
-            let _ = handle_connection(stream);
-        }
-    }
-    Ok(())
-}
+    server.start()?;
 
-#[derive(Debug)]
-enum HttpError {
-    IO(IoError),
-}
-
-impl From<IoError> for HttpError {
-    fn from(err: IoError) -> HttpError {
-        HttpError::IO(err)
-    }
-}
-
-fn handle_connection(mut stream: TcpStream) -> Result<(), HttpError> {
-    let mut buffer = [0; 1024];
-
-    stream.read(&mut buffer)?;
-
-    println!("Request: \n{}", String::from_utf8_lossy(&buffer[..]));
-
-    let msgs = [
-        "Hello\r\n",
-        "World\r\n",
-        "I'm\r\n",
-        "chunked\r\n",
-        "and\r\n",
-        "looooooooong!\r\n",
-    ];
-    let start = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
-
-    stream.write(start.as_bytes())?;
-    stream.flush()?;
-
-    for msg in msgs {
-        let chunk = format!("{:x}\r\n{}\r\n", msg.len(), msg);
-        println!("{}", chunk);
-        stream.write(chunk.as_bytes())?;
-        stream.flush()?;
-        thread::sleep(Duration::from_secs(1));
-    }
-
-    let stop = "0\r\n\r\n";
-    stream.write(stop.as_bytes())?;
-    stream.flush()?;
     Ok(())
 }
