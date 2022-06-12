@@ -15,12 +15,16 @@ impl From<IoError> for HttpError {
     }
 }
 
-pub type Stream = fn(u32) -> Option<Vec<u8>>;
+pub type Streamable = Box<dyn Iterator<Item = Vec<u8>>>;
 
-#[derive(Debug)]
+pub enum BodyType {
+    Fixed(Vec<u8>),
+    Stream(Streamable),
+}
+
 pub struct Response {
     pub status: u32,
-    pub data: Stream,
+    pub body: BodyType,
 }
 
 type RouteFn = fn(Vec<u8>) -> Response;
@@ -59,7 +63,7 @@ impl RestServer {
         Ok(self)
     }
 
-    fn handle_connection(&self, mut stream: TcpStream) -> Result<(), HttpError> {
+    fn handle_connection(&self, stream: TcpStream) -> Result<(), HttpError> {
         let mut reader = BufReader::new(stream.try_clone().unwrap());
         let mut start = String::new();
         let len = reader.read_line(&mut start)?;
@@ -67,33 +71,66 @@ impl RestServer {
             return Err(HttpError::BadRequest);
         }
         let splitted: Vec<&str> = start.split(' ').collect();
+        // check len...
         if let Some(route) = self.routes.get(splitted[1]) {
             let resp = route(vec![]);
 
-            let start = format!(
-                "HTTP/1.1 {} OK\r\nTransfer-Encoding: chunked\r\n\r\n",
-                resp.status
-            );
-
-            stream.write(start.as_bytes())?;
-            stream.flush()?;
-
-            let data = resp.data;
-            let mut count: u32 = 0;
-            while let Some(data) = data(count) {
-                count += 1;
-                let chunk_head = format!("{:x}\r\n", data.len());
-                stream.write(chunk_head.as_bytes())?;
-                stream.write(&data[..])?;
-                stream.write("\r\n".as_bytes())?;
-                stream.flush()?;
-            }
-            stream.write("0\r\n\r\n".as_bytes())?;
-            stream.flush()?;
+            match resp.body {
+                BodyType::Fixed(body) => self.fixed_response(stream, resp.status, &body),
+                BodyType::Stream(body) => self.stream_response(stream, resp.status, body),
+            }?;
         } else {
-            stream.write("HTTP/1.1 404 NotFound\r\n\r\n".as_bytes())?;
+            let resp = format!("Route {} does not exists\r\n", splitted[1])
+                .as_bytes()
+                .to_vec();
+            self.fixed_response(stream, 404, &resp)?;
+        }
+        Ok(())
+    }
+
+    fn stream_response(
+        &self,
+        mut stream: TcpStream,
+        status: u32,
+        mut body: Streamable,
+    ) -> Result<(), HttpError> {
+        let start = format!(
+            "HTTP/1.1 {} OK\r\nTransfer-Encoding: chunked\r\n\r\n",
+            status
+        );
+
+        stream.write(start.as_bytes())?;
+        stream.flush()?;
+
+        while let Some(data) = body.next() {
+            let chunk_head = format!("{:x}\r\n", data.len());
+            stream.write(chunk_head.as_bytes())?;
+            stream.write(&data[..])?;
+            stream.write("\r\n".as_bytes())?;
             stream.flush()?;
         }
+
+        stream.write("0\r\n\r\n".as_bytes())?;
+        stream.flush()?;
+
+        Ok(())
+    }
+
+    fn fixed_response(
+        &self,
+        mut stream: TcpStream,
+        status: u32,
+        body: &Vec<u8>,
+    ) -> Result<(), HttpError> {
+        let start = format!(
+            "HTTP/1.1 {} OK\r\nContent-Length: {}\r\n\r\n",
+            status,
+            body.len()
+        );
+        stream.write(start.as_bytes())?;
+        stream.write(&body[..])?;
+        stream.flush()?;
+
         Ok(())
     }
 }

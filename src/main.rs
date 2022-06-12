@@ -1,32 +1,64 @@
 mod server;
 
-use server::{HttpError, Response, RestServer};
+use std::{thread, time::Duration};
+
+use server::{BodyType, HttpError, Response, RestServer};
 
 fn empty(_: Vec<u8>) -> Response {
     Response {
         status: 204,
-        data: |_| -> Option<Vec<u8>> { None },
+        body: BodyType::Fixed(vec![]),
     }
 }
 
 fn bad(_: Vec<u8>) -> Response {
     Response {
         status: 400,
-        data: |_| -> Option<Vec<u8>> { None },
+        body: BodyType::Fixed("This was bad\r\n".as_bytes().to_vec()),
     }
 }
 
 fn greeting(_: Vec<u8>) -> Response {
     Response {
         status: 200,
-        data: |i| -> Option<Vec<u8>> {
-            match i {
-                0 => Some("Hello\r\n".into()),
-                1 => Some("World\r\n".into()),
-                2 => None,
-                _ => None,
-            }
-        },
+        body: BodyType::Stream(Box::new(
+            [
+                "Hello\r\n".as_bytes().to_vec(),
+                "World\r\n".as_bytes().to_vec(),
+            ]
+            .into_iter(),
+        )),
+    }
+}
+
+struct SlowResponse {
+    count: usize,
+    max: usize,
+}
+
+impl SlowResponse {
+    fn new(max: usize) -> SlowResponse {
+        SlowResponse { count: 0, max }
+    }
+}
+
+impl Iterator for SlowResponse {
+    type Item = Vec<u8>;
+    fn next(&mut self) -> Option<<Self as Iterator>::Item> {
+        if self.count >= self.max {
+            return None;
+        }
+        self.count += 1;
+        let msg = format!("Call number {}\r\n", self.count);
+        thread::sleep(Duration::from_secs(1));
+        Some(msg.as_bytes().to_vec())
+    }
+}
+
+fn slow(_: Vec<u8>) -> Response {
+    Response {
+        status: 200,
+        body: BodyType::Stream(Box::new(SlowResponse::new(10))),
     }
 }
 
@@ -34,8 +66,8 @@ fn main() -> Result<(), HttpError> {
     let server = RestServer::new("0.0.0.0:8080")?
         .get("/", empty)?
         .get("/bad", bad)?
-        .get("/greeting", greeting)?;
-
+        .get("/greeting", greeting)?
+        .get("/slow", slow)?;
     server.start()?;
 
     Ok(())
