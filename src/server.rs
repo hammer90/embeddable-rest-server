@@ -5,9 +5,6 @@ use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 #[derive(Debug)]
 pub enum HttpError {
     RouteExists,
-    NotFound(String),
-    BadVersion(String),
-    BadRequest,
     IO(IoError),
 }
 
@@ -39,10 +36,10 @@ struct ParsedFirstLine {
 }
 
 impl ParsedFirstLine {
-    fn parse(line: String) -> Result<Self, HttpError> {
+    fn parse(line: String) -> Result<Self, ()> {
         let splitted: Vec<&str> = line.split(' ').collect();
         if splitted.len() != 3 {
-            return Err(HttpError::BadRequest);
+            return Err(());
         }
         let path_query = splitted[1].split_once('?');
         if let Some((path, query)) = path_query {
@@ -83,7 +80,7 @@ impl RestServer {
     pub fn start(&self) -> Result<(), HttpError> {
         for stream in self.listener.incoming() {
             if let Ok(stream) = stream {
-                let result = self.handle_connection_and_send_errors(stream);
+                let result = self.handle_connection(stream);
                 if let Err(err) = result {
                     println!("{:?}", err);
                 }
@@ -100,64 +97,71 @@ impl RestServer {
         Ok(self)
     }
 
-    fn handle_connection_and_send_errors(&self, stream: TcpStream) -> Result<(), HttpError> {
-        let result = self.handle_connection(&stream);
-        match result {
-            Err(HttpError::BadRequest) => {
-                return self.fixed_response(&stream, 400, &"Bad Request\r\n".as_bytes().to_vec());
-            }
-            Err(HttpError::NotFound(path)) => {
-                return self.fixed_response(
-                    &stream,
-                    404,
-                    &format!("Route {} does not exists\r\n", path)
-                        .as_bytes()
-                        .to_vec(),
-                );
-            }
-            Err(HttpError::BadVersion(version)) => {
-                return self.fixed_response(
-                    &stream,
-                    400,
-                    &format!("Verion {} not supported\r\n", version)
-                        .as_bytes()
-                        .to_vec(),
-                );
-            }
-            Err(err) => Err(err),
-            Ok(_) => Ok(()),
-        }
-    }
-
-    fn handle_connection(&self, stream: &TcpStream) -> Result<(), HttpError> {
-        let mut reader = BufReader::new(stream);
+    fn handle_connection(&self, stream: TcpStream) -> Result<(), HttpError> {
+        let mut reader = BufReader::new(stream.try_clone()?);
         let mut start = String::new();
         let len = reader.read_line(&mut start)?;
         if len == 0 {
-            return Err(HttpError::BadRequest);
+            return self.send_not_http_conform_request(stream);
         }
-        let parsed = ParsedFirstLine::parse(start)?;
-        if !parsed.version.starts_with("HTTP/1.1") {
-            return Err(HttpError::BadVersion(parsed.version));
-        }
+        let parsed = ParsedFirstLine::parse(start);
+        if let Ok(parsed) = parsed {
+            if !parsed.version.starts_with("HTTP/1.1") {
+                return self.send_unsupported_version(stream, parsed.version);
+            }
 
-        let route_key = format!("{} {}", parsed.method, parsed.path);
-        if let Some(route) = self.routes.get(&route_key) {
-            let resp = route(parsed.query, vec![]);
+            let route_key = format!("{} {}", parsed.method, parsed.path);
+            if let Some(route) = self.routes.get(&route_key) {
+                let resp = route(parsed.query, vec![]);
 
-            match resp.body {
-                BodyType::Fixed(body) => self.fixed_response(stream, resp.status, &body),
-                BodyType::Stream(body) => self.stream_response(stream, resp.status, body),
-            }?;
+                match resp.body {
+                    BodyType::Fixed(body) => self.fixed_response(stream, resp.status, &body),
+                    BodyType::Stream(body) => self.stream_response(stream, resp.status, body),
+                }?;
+            } else {
+                return self.send_not_found(stream, parsed.path);
+            }
         } else {
-            return Err(HttpError::NotFound(parsed.path));
+            return self.send_not_http_conform_request(stream);
         }
         Ok(())
     }
 
+    fn send_not_http_conform_request(&self, stream: TcpStream) -> Result<(), HttpError> {
+        self.fixed_response(
+            stream,
+            400,
+            &"Not HTTP conform request\r\n".as_bytes().to_vec(),
+        )
+    }
+
+    fn send_unsupported_version(
+        &self,
+        stream: TcpStream,
+        version: String,
+    ) -> Result<(), HttpError> {
+        self.fixed_response(
+            stream,
+            400,
+            &format!("Verion {} not supported\r\n", version)
+                .as_bytes()
+                .to_vec(),
+        )
+    }
+
+    fn send_not_found(&self, stream: TcpStream, path: String) -> Result<(), HttpError> {
+        self.fixed_response(
+            stream,
+            404,
+            &format!("Route {} does not exists\r\n", path)
+                .as_bytes()
+                .to_vec(),
+        )
+    }
+
     fn stream_response(
         &self,
-        mut stream: &TcpStream,
+        mut stream: TcpStream,
         status: u32,
         mut body: Streamable,
     ) -> Result<(), HttpError> {
@@ -185,7 +189,7 @@ impl RestServer {
 
     fn fixed_response(
         &self,
-        mut stream: &TcpStream,
+        mut stream: TcpStream,
         status: u32,
         body: &Vec<u8>,
     ) -> Result<(), HttpError> {
