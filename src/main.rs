@@ -4,21 +4,21 @@ use std::{thread, time::Duration};
 
 use server::{BodyType, HttpError, Response, RestServer};
 
-fn empty(_: Vec<u8>) -> Response {
+fn empty(_: Option<String>, _: Vec<u8>) -> Response {
     Response {
         status: 204,
         body: BodyType::Fixed(vec![]),
     }
 }
 
-fn bad(_: Vec<u8>) -> Response {
+fn bad(_: Option<String>, _: Vec<u8>) -> Response {
     Response {
         status: 400,
         body: BodyType::Fixed("This was bad\r\n".as_bytes().to_vec()),
     }
 }
 
-fn greeting(_: Vec<u8>) -> Response {
+fn greeting(_: Option<String>, _: Vec<u8>) -> Response {
     Response {
         status: 200,
         body: BodyType::Stream(Box::new(
@@ -55,10 +55,18 @@ impl Iterator for SlowResponse {
     }
 }
 
-fn slow(_: Vec<u8>) -> Response {
+fn slow(query: Option<String>, _: Vec<u8>) -> Response {
+    let query = query.unwrap_or("10".to_string());
+    let count = query.parse::<usize>();
+    if let Err(_) = count {
+        return Response {
+            status: 400,
+            body: BodyType::Fixed("Query should be a number\r\n".as_bytes().to_vec()),
+        };
+    }
     Response {
         status: 200,
-        body: BodyType::Stream(Box::new(SlowResponse::new(10))),
+        body: BodyType::Stream(Box::new(SlowResponse::new(count.unwrap_or(10)))),
     }
 }
 
