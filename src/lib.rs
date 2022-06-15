@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 use std::io::{prelude::*, BufReader, Error as IoError};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
+use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 #[derive(Debug)]
 pub enum HttpError {
@@ -63,6 +66,7 @@ impl ParsedFirstLine {
 pub struct RestServer {
     listener: TcpListener,
     routes: HashMap<String, RouteFn>,
+    shutdown: Arc<Mutex<bool>>,
 }
 
 impl RestServer {
@@ -71,13 +75,17 @@ impl RestServer {
         A: ToSocketAddrs,
     {
         let listener = TcpListener::bind(addr)?;
+        listener.set_nonblocking(true)?;
+        let shutdown = Arc::new(Mutex::new(false));
         Ok(Self {
             listener,
             routes: HashMap::new(),
+            shutdown,
         })
     }
 
     pub fn start(&self) -> Result<(), HttpError> {
+        let stop = self.shutdown.clone();
         for stream in self.listener.incoming() {
             if let Ok(stream) = stream {
                 let result = self.handle_connection(stream);
@@ -85,6 +93,11 @@ impl RestServer {
                     println!("{:?}", err);
                 }
             }
+            if *stop.lock().unwrap() {
+                println!("shutting down");
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
         }
         Ok(())
     }
@@ -205,6 +218,34 @@ impl RestServer {
         stream.flush()?;
 
         Ok(())
+    }
+}
+
+pub struct SpawnedRestServer {
+    _handle: JoinHandle<Result<(), HttpError>>,
+    stop: Arc<Mutex<bool>>,
+}
+
+impl SpawnedRestServer {
+    pub fn spawn(server: RestServer) -> Self {
+        let stop = server.shutdown.clone();
+        let handle = thread::spawn(move || server.start());
+        SpawnedRestServer {
+            _handle: handle,
+            stop,
+        }
+    }
+
+    pub fn stop(&self) {
+        let mut shutdown_lock = self.stop.lock().unwrap();
+        *shutdown_lock = true;
+    }
+}
+
+impl Drop for SpawnedRestServer {
+    fn drop(&mut self) {
+        self.stop();
+        thread::sleep(Duration::from_millis(100));
     }
 }
 
