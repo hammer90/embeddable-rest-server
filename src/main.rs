@@ -1,8 +1,8 @@
-mod server;
+mod lib;
 
 use std::{thread, time::Duration};
 
-use server::{BodyType, HttpError, Response, RestServer};
+use lib::{BodyType, HttpError, Response, RestServer};
 
 fn empty(_: Option<String>, _: Vec<u8>) -> Response {
     Response {

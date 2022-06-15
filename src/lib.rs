@@ -26,7 +26,7 @@ pub struct Response {
     pub body: BodyType,
 }
 
-type RouteFn = fn(query: Option<String>, data: Vec<u8>) -> Response;
+pub type RouteFn = fn(query: Option<String>, data: Vec<u8>) -> Response;
 
 struct ParsedFirstLine {
     method: String,
