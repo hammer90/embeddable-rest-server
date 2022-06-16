@@ -1,23 +1,16 @@
 mod common;
-use common::start_server;
-
-use curl::easy::Easy;
+use common::{get_err, start_server};
 
 #[test]
 fn not_found() {
     let _server = start_server(vec![]);
 
-    let mut dst = Vec::new();
-    let mut easy = Easy::new();
-    easy.url("localhost:8080/panic").unwrap();
+    let response = get_err("http://localhost:8080/no_route");
 
-    let mut transfer = easy.transfer();
-    transfer
-        .write_function(|data| {
-            dst.extend_from_slice(data);
-            println!("{:?}", data);
-            Ok(data.len())
-        })
-        .unwrap();
-    transfer.perform().unwrap();
+    assert_eq!(response.status(), 404);
+    assert_eq!(response.status_text(), "Not Found");
+    assert_eq!(
+        response.into_string().unwrap(),
+        "Route /no_route does not exists\r\n"
+    );
 }

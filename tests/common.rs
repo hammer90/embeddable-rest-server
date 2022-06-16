@@ -1,4 +1,5 @@
 use embeddable_rest_server::{HttpError, RestServer, RouteFn, SpawnedRestServer};
+use ureq::Response;
 
 pub fn start_server(routes: Vec<(String, RouteFn)>) -> SpawnedRestServer {
     let server = setup_server(routes).unwrap();
@@ -13,4 +14,8 @@ pub fn setup_server(routes: Vec<(String, RouteFn)>) -> Result<RestServer, HttpEr
     }
 
     Ok(server)
+}
+
+pub fn get_err(addr: &str) -> Response {
+    ureq::get(addr).call().unwrap_err().into_response().unwrap()
 }

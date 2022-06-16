@@ -15,4 +15,4 @@ readme = "README.md"
 [dependencies]
 
 [dev-dependencies]
-curl = "0.4.43"
+ureq = "2.4.0"
