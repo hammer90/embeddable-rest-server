@@ -17,11 +17,43 @@ impl From<IoError> for HttpError {
     }
 }
 
-pub type Streamable = Box<dyn Iterator<Item = Vec<u8>>>;
+pub trait Streamable: Iterator<Item = Vec<u8>> {
+    fn trailer_names(&self) -> Vec<String>;
+    fn trailers(&self) -> Vec<(String, String)>;
+}
+
+struct NoTrailers {
+    base: Box<dyn Iterator<Item = Vec<u8>>>,
+}
+
+impl NoTrailers {
+    fn new(base: Box<dyn Iterator<Item = Vec<u8>>>) -> Self {
+        Self { base }
+    }
+}
+
+impl Iterator for NoTrailers {
+    type Item = Vec<u8>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.base.next()
+    }
+}
+
+impl Streamable for NoTrailers {
+    fn trailer_names(&self) -> Vec<String> {
+        vec![]
+    }
+
+    fn trailers(&self) -> Vec<(String, String)> {
+        vec![]
+    }
+}
 
 pub enum BodyType {
     Fixed(Vec<u8>),
-    Stream(Streamable),
+    Stream(Box<dyn Iterator<Item = Vec<u8>>>),
+    StreamWithTrailers(Box<dyn Streamable>),
 }
 
 pub struct Response {
@@ -129,7 +161,12 @@ impl RestServer {
 
                 match resp.body {
                     BodyType::Fixed(body) => self.fixed_response(stream, resp.status, &body),
-                    BodyType::Stream(body) => self.stream_response(stream, resp.status, body),
+                    BodyType::StreamWithTrailers(body) => {
+                        self.stream_response(stream, resp.status, body)
+                    }
+                    BodyType::Stream(body) => {
+                        self.stream_response(stream, resp.status, Box::new(NoTrailers::new(body)))
+                    }
                 }?;
             } else {
                 return self.send_not_found(stream, parsed.path);
@@ -176,15 +213,21 @@ impl RestServer {
         &self,
         mut stream: TcpStream,
         status: u32,
-        mut body: Streamable,
+        mut body: Box<dyn Streamable>,
     ) -> Result<(), HttpError> {
         let start = format!(
-            "HTTP/1.1 {} {}\r\nTransfer-Encoding: chunked\r\n\r\n",
+            "HTTP/1.1 {} {}\r\nTransfer-Encoding: chunked\r\n",
             status,
             status_text(status),
         );
 
         stream.write(start.as_bytes())?;
+        let trailer_names = body.trailer_names();
+        let has_trailers = trailer_names.len() > 0;
+        if has_trailers {
+            stream.write(format!("Trailers: {}\r\n", trailer_names.join(",")).as_bytes())?;
+        }
+        stream.write("\r\n".as_bytes())?;
         stream.flush()?;
 
         while let Some(data) = body.next() {
@@ -195,7 +238,14 @@ impl RestServer {
             stream.flush()?;
         }
 
-        stream.write("0\r\n\r\n".as_bytes())?;
+        stream.write("0\r\n".as_bytes())?;
+        if has_trailers {
+            let trailers = body.trailers();
+            for trailer in trailers {
+                stream.write(format!("{}: {}\r\n", trailer.0, trailer.1).as_bytes())?;
+            }
+        }
+        stream.write("\r\n".as_bytes())?;
         stream.flush()?;
 
         Ok(())

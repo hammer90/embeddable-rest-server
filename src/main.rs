@@ -2,7 +2,7 @@ mod lib;
 
 use std::{thread, time::Duration};
 
-use lib::{BodyType, HttpError, Response, RestServer};
+use lib::{BodyType, HttpError, Response, RestServer, Streamable};
 
 fn empty(_: Option<String>, _: Vec<u8>) -> Response {
     Response {
@@ -70,12 +70,57 @@ fn slow(query: Option<String>, _: Vec<u8>) -> Response {
     }
 }
 
+struct WithTrailers {
+    count: usize,
+    msg: String,
+}
+
+impl WithTrailers {
+    fn new(msg: &str) -> Self {
+        Self {
+            count: 0,
+            msg: msg.to_string(),
+        }
+    }
+}
+
+impl Iterator for WithTrailers {
+    type Item = Vec<u8>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.count += 1;
+        match self.count {
+            1 => Some("Hello\r\n".as_bytes().to_vec()),
+            2 => Some("Trailers\r\n".as_bytes().to_vec()),
+            _ => None,
+        }
+    }
+}
+
+impl Streamable for WithTrailers {
+    fn trailer_names(&self) -> Vec<String> {
+        vec!["foo".to_string()]
+    }
+
+    fn trailers(&self) -> Vec<(String, String)> {
+        vec![("foo".to_string(), self.msg.to_string())]
+    }
+}
+
+fn trailered(_: Option<String>, _: Vec<u8>) -> Response {
+    Response {
+        status: 200,
+        body: BodyType::StreamWithTrailers(Box::new(WithTrailers::new("bar"))),
+    }
+}
+
 fn main() -> Result<(), HttpError> {
     let server = RestServer::new("0.0.0.0:8080")?
         .get("/", empty)?
         .get("/bad", bad)?
         .get("/greeting", greeting)?
-        .get("/slow", slow)?;
+        .get("/slow", slow)?
+        .get("/trailered", trailered)?;
     server.start()?;
 
     Ok(())
