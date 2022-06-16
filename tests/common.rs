@@ -1,13 +1,14 @@
 use embeddable_rest_server::{HttpError, RestServer, RouteFn, SpawnedRestServer};
-use ureq::Response;
+use isahc::Response;
 
-pub fn start_server(routes: Vec<(String, RouteFn)>) -> SpawnedRestServer {
-    let server = setup_server(routes).unwrap();
-    SpawnedRestServer::spawn(server)
+pub fn start_server(routes: Vec<(String, RouteFn)>) -> (u16, SpawnedRestServer) {
+    let port = portpicker::pick_unused_port().unwrap();
+    let server = setup_server(port, routes).unwrap();
+    (port, SpawnedRestServer::spawn(server))
 }
 
-pub fn setup_server(routes: Vec<(String, RouteFn)>) -> Result<RestServer, HttpError> {
-    let mut server = RestServer::new("0.0.0.0:8080")?;
+fn setup_server(port: u16, routes: Vec<(String, RouteFn)>) -> Result<RestServer, HttpError> {
+    let mut server = RestServer::new(format!("0.0.0.0:{}", port))?;
 
     for (route, func) in routes {
         server = server.get(route.as_str(), func)?;
@@ -16,6 +17,6 @@ pub fn setup_server(routes: Vec<(String, RouteFn)>) -> Result<RestServer, HttpEr
     Ok(server)
 }
 
-pub fn get_err(addr: &str) -> Response {
-    ureq::get(addr).call().unwrap_err().into_response().unwrap()
+pub fn get(port: u16, route: &str) -> Response<isahc::Body> {
+    isahc::get(format!("http://localhost:{}{}", port, route).as_str()).unwrap()
 }
