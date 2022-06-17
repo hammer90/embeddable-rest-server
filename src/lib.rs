@@ -166,34 +166,44 @@ impl RestServer {
             return self.send_not_http_conform_request(stream);
         }
         let parsed = ParsedFirstLine::parse(start);
-        if let Ok(parsed) = parsed {
-            if !parsed.version.starts_with("HTTP/1.1") {
-                return self.send_unsupported_version(stream, parsed.version);
+        match parsed {
+            Err(_) => {
+                return self.send_not_http_conform_request(stream);
             }
+            Ok(parsed) => {
+                if !parsed.version.starts_with("HTTP/1.1") {
+                    return self.send_unsupported_version(stream, parsed.version);
+                }
 
-            let route_key = format!("{} {}", parsed.method, parsed.path);
-            if let Some(route) = self.routes.get(&route_key) {
-                let resp = route(Request {
-                    params: None,
-                    query: parsed.query,
-                    headers: None,
-                    data: None,
-                });
+                let route_key = format!("{} {}", parsed.method, parsed.path);
+                match self.routes.get(&route_key) {
+                    None => {
+                        return self.send_not_found(stream, parsed.path);
+                    }
+                    Some(route) => {
+                        let resp = route(Request {
+                            params: None,
+                            query: parsed.query,
+                            headers: None,
+                            data: None,
+                        });
 
-                match resp.body {
-                    BodyType::Fixed(body) => self.fixed_response(stream, resp.status, &body),
-                    BodyType::StreamWithTrailers(body) => {
-                        self.stream_response(stream, resp.status, body)
+                        match resp.body {
+                            BodyType::Fixed(body) => {
+                                self.fixed_response(stream, resp.status, &body)
+                            }
+                            BodyType::StreamWithTrailers(body) => {
+                                self.stream_response(stream, resp.status, body)
+                            }
+                            BodyType::Stream(body) => self.stream_response(
+                                stream,
+                                resp.status,
+                                Box::new(NoTrailers::new(body)),
+                            ),
+                        }?;
                     }
-                    BodyType::Stream(body) => {
-                        self.stream_response(stream, resp.status, Box::new(NoTrailers::new(body)))
-                    }
-                }?;
-            } else {
-                return self.send_not_found(stream, parsed.path);
+                }
             }
-        } else {
-            return self.send_not_http_conform_request(stream);
         }
         Ok(())
     }
