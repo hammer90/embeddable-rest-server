@@ -6,15 +6,36 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 #[derive(Debug)]
+pub enum ResponseableError {
+    NotHttpConform,
+    UnsupportedVersion(String),
+    NotFound(String),
+    BadHeader(String),
+    IO(IoError),
+}
+
+#[derive(Debug)]
 pub enum HttpError {
     RouteExists,
     IO(IoError),
-    BadHeader,
+    Responseable(ResponseableError),
+}
+
+impl From<IoError> for ResponseableError {
+    fn from(err: IoError) -> ResponseableError {
+        ResponseableError::IO(err)
+    }
 }
 
 impl From<IoError> for HttpError {
     fn from(err: IoError) -> HttpError {
         HttpError::IO(err)
+    }
+}
+
+impl From<ResponseableError> for HttpError {
+    fn from(err: ResponseableError) -> HttpError {
+        HttpError::Responseable(err)
     }
 }
 
@@ -88,10 +109,10 @@ struct ParsedFirstLine {
 }
 
 impl ParsedFirstLine {
-    fn parse(line: String) -> Result<Self, ()> {
+    fn parse(line: String) -> Result<Self, ResponseableError> {
         let splitted: Vec<&str> = line.split(' ').collect();
         if splitted.len() != 3 {
-            return Err(());
+            return Err(ResponseableError::NotHttpConform);
         }
         let path_query = splitted[1].split_once('?');
         if let Some((path, query)) = path_query {
@@ -112,7 +133,9 @@ impl ParsedFirstLine {
     }
 }
 
-fn parse_headers(reader: &mut BufReader<TcpStream>) -> Result<HashMap<String, String>, HttpError> {
+fn parse_headers(
+    reader: &mut BufReader<TcpStream>,
+) -> Result<HashMap<String, String>, ResponseableError> {
     let mut headers = HashMap::new();
     loop {
         let mut header = String::new();
@@ -123,7 +146,7 @@ fn parse_headers(reader: &mut BufReader<TcpStream>) -> Result<HashMap<String, St
         if let Some((name, value)) = header.split_once(':') {
             headers.insert(name.to_string(), value[1..(value.len() - 2)].to_string());
         } else {
-            return Err(HttpError::BadHeader);
+            return Err(ResponseableError::BadHeader(header));
         }
     }
     Ok(headers)
@@ -154,7 +177,7 @@ impl RestServer {
         let stop = self.shutdown.clone();
         for stream in self.listener.incoming() {
             if let Ok(stream) = stream {
-                let result = self.handle_connection(stream);
+                let result = self.handle_connection_witherrors(stream);
                 if let Err(err) = result {
                     println!("{:?}", err);
                 }
@@ -176,67 +199,60 @@ impl RestServer {
         Ok(self)
     }
 
-    fn handle_connection(&self, stream: TcpStream) -> Result<(), HttpError> {
+    fn handle_connection_witherrors(&self, stream: TcpStream) -> Result<(), HttpError> {
+        let result = self.handle_connection(&stream);
+        match result {
+            Err(HttpError::Responseable(responseable)) => match responseable {
+                ResponseableError::NotHttpConform => self.send_not_http_conform_request(stream),
+                ResponseableError::UnsupportedVersion(version) => {
+                    self.send_unsupported_version(stream, version)
+                }
+                ResponseableError::NotFound(path) => self.send_not_found(stream, path),
+                ResponseableError::BadHeader(_) => self.send_bad_headers(stream),
+                ResponseableError::IO(_) => self.send_io_error(stream),
+            },
+            result => result,
+        }
+    }
+
+    fn handle_connection(&self, stream: &TcpStream) -> Result<(), HttpError> {
         let mut reader = BufReader::new(stream.try_clone()?);
         let mut start = String::new();
         let len = reader.read_line(&mut start)?;
         if len == 0 {
-            return self.send_not_http_conform_request(stream);
+            return Err(ResponseableError::NotHttpConform)?;
         }
-        let parsed = ParsedFirstLine::parse(start);
-        match parsed {
-            Err(_) => {
-                return self.send_not_http_conform_request(stream);
-            }
-            Ok(parsed) => {
-                if !parsed.version.starts_with("HTTP/1.1") {
-                    return self.send_unsupported_version(stream, parsed.version);
-                }
+        let parsed = ParsedFirstLine::parse(start)?;
+        if !parsed.version.starts_with("HTTP/1.1") {
+            return Err(ResponseableError::UnsupportedVersion(parsed.version))?;
+        }
 
-                let route_key = format!("{} {}", parsed.method, parsed.path);
-                match self.routes.get(&route_key) {
-                    None => {
-                        return self.send_not_found(stream, parsed.path);
-                    }
-                    Some(route) => {
-                        let headers = parse_headers(&mut reader);
-                        match headers {
-                            Err(_) => {
-                                return self.send_bad_headers(stream);
-                            }
-                            Ok(headers) => {
-                                let resp = route(Request {
-                                    params: None,
-                                    query: parsed.query,
-                                    headers,
-                                    data: None,
-                                });
+        let route_key = format!("{} {}", parsed.method, parsed.path);
+        let route = self
+            .routes
+            .get(&route_key)
+            .ok_or(ResponseableError::NotFound(parsed.path))?;
 
-                                match resp.body {
-                                    BodyType::Fixed(body) => {
-                                        self.fixed_response(stream, resp.status, &body)
-                                    }
-                                    BodyType::StreamWithTrailers(body) => {
-                                        self.stream_response(stream, resp.status, body)
-                                    }
-                                    BodyType::Stream(body) => self.stream_response(
-                                        stream,
-                                        resp.status,
-                                        Box::new(NoTrailers::new(body)),
-                                    ),
-                                }?;
-                            }
-                        }
-                    }
-                }
+        let headers = parse_headers(&mut reader)?;
+        let resp = route(Request {
+            params: None,
+            query: parsed.query,
+            headers,
+            data: None,
+        });
+
+        match resp.body {
+            BodyType::Fixed(body) => self.fixed_response(stream, resp.status, &body),
+            BodyType::StreamWithTrailers(body) => self.stream_response(stream, resp.status, body),
+            BodyType::Stream(body) => {
+                self.stream_response(stream, resp.status, Box::new(NoTrailers::new(body)))
             }
         }
-        Ok(())
     }
 
     fn send_not_http_conform_request(&self, stream: TcpStream) -> Result<(), HttpError> {
         self.fixed_response(
-            stream,
+            &stream,
             400,
             &"Not HTTP conform request\r\n".as_bytes().to_vec(),
         )
@@ -248,7 +264,7 @@ impl RestServer {
         version: String,
     ) -> Result<(), HttpError> {
         self.fixed_response(
-            stream,
+            &stream,
             505,
             &format!("Verion {} not supported\r\n", version)
                 .as_bytes()
@@ -256,13 +272,21 @@ impl RestServer {
         )
     }
 
+    fn send_io_error(&self, stream: TcpStream) -> Result<(), HttpError> {
+        self.fixed_response(
+            &stream,
+            400,
+            &"IO Error while reading\r\n".as_bytes().to_vec(),
+        )
+    }
+
     fn send_bad_headers(&self, stream: TcpStream) -> Result<(), HttpError> {
-        self.fixed_response(stream, 400, &"Invalid header data\r\n".as_bytes().to_vec())
+        self.fixed_response(&stream, 400, &"Invalid header data\r\n".as_bytes().to_vec())
     }
 
     fn send_not_found(&self, stream: TcpStream, path: String) -> Result<(), HttpError> {
         self.fixed_response(
-            stream,
+            &stream,
             404,
             &format!("Route {} does not exists\r\n", path)
                 .as_bytes()
@@ -272,7 +296,7 @@ impl RestServer {
 
     fn stream_response(
         &self,
-        mut stream: TcpStream,
+        mut stream: &TcpStream,
         status: u32,
         mut body: Box<dyn Streamable>,
     ) -> Result<(), HttpError> {
@@ -314,7 +338,7 @@ impl RestServer {
 
     fn fixed_response(
         &self,
-        mut stream: TcpStream,
+        mut stream: &TcpStream,
         status: u32,
         body: &Vec<u8>,
     ) -> Result<(), HttpError> {
