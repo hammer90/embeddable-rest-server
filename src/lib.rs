@@ -9,6 +9,7 @@ use std::time::Duration;
 pub enum HttpError {
     RouteExists,
     IO(IoError),
+    BadHeader,
 }
 
 impl From<IoError> for HttpError {
@@ -73,7 +74,7 @@ impl Response {
 pub struct Request {
     pub params: Option<HashMap<String, String>>,
     pub query: Option<String>,
-    pub headers: Option<HashMap<String, String>>,
+    pub headers: HashMap<String, String>,
     pub data: Option<Vec<u8>>,
 }
 
@@ -109,6 +110,23 @@ impl ParsedFirstLine {
             })
         }
     }
+}
+
+fn parse_headers(reader: &mut BufReader<TcpStream>) -> Result<HashMap<String, String>, HttpError> {
+    let mut headers = HashMap::new();
+    loop {
+        let mut header = String::new();
+        let len = reader.read_line(&mut header)?;
+        if len == 0 || header == "\r\n" {
+            break;
+        }
+        if let Some((name, value)) = header.split_once(':') {
+            headers.insert(name.to_string(), value[1..(value.len() - 2)].to_string());
+        } else {
+            return Err(HttpError::BadHeader);
+        }
+    }
+    Ok(headers)
 }
 
 pub struct RestServer {
@@ -181,26 +199,34 @@ impl RestServer {
                         return self.send_not_found(stream, parsed.path);
                     }
                     Some(route) => {
-                        let resp = route(Request {
-                            params: None,
-                            query: parsed.query,
-                            headers: None,
-                            data: None,
-                        });
+                        let headers = parse_headers(&mut reader);
+                        match headers {
+                            Err(_) => {
+                                return self.send_bad_headers(stream);
+                            }
+                            Ok(headers) => {
+                                let resp = route(Request {
+                                    params: None,
+                                    query: parsed.query,
+                                    headers,
+                                    data: None,
+                                });
 
-                        match resp.body {
-                            BodyType::Fixed(body) => {
-                                self.fixed_response(stream, resp.status, &body)
+                                match resp.body {
+                                    BodyType::Fixed(body) => {
+                                        self.fixed_response(stream, resp.status, &body)
+                                    }
+                                    BodyType::StreamWithTrailers(body) => {
+                                        self.stream_response(stream, resp.status, body)
+                                    }
+                                    BodyType::Stream(body) => self.stream_response(
+                                        stream,
+                                        resp.status,
+                                        Box::new(NoTrailers::new(body)),
+                                    ),
+                                }?;
                             }
-                            BodyType::StreamWithTrailers(body) => {
-                                self.stream_response(stream, resp.status, body)
-                            }
-                            BodyType::Stream(body) => self.stream_response(
-                                stream,
-                                resp.status,
-                                Box::new(NoTrailers::new(body)),
-                            ),
-                        }?;
+                        }
                     }
                 }
             }
@@ -228,6 +254,10 @@ impl RestServer {
                 .as_bytes()
                 .to_vec(),
         )
+    }
+
+    fn send_bad_headers(&self, stream: TcpStream) -> Result<(), HttpError> {
+        self.fixed_response(stream, 400, &"Invalid header data\r\n".as_bytes().to_vec())
     }
 
     fn send_not_found(&self, stream: TcpStream, path: String) -> Result<(), HttpError> {

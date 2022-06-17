@@ -1,5 +1,5 @@
 mod common;
-use common::{get, start_server};
+use common::{get, get_header, start_server};
 use embeddable_rest_server::{BodyType, Response, Streamable};
 use isahc::{ReadResponseExt, ResponseExt};
 
@@ -124,4 +124,17 @@ fn trailers() {
     assert_eq!(res.headers()["trailers"], "foo");
     assert_eq!(res.text().unwrap(), "Hello\r\nTrailers\r\n");
     assert_eq!(res.trailer().try_get().unwrap()["foo"], "bar");
+}
+
+#[test]
+fn headers() {
+    let (port, _server) = start_server(vec![("/headers".to_string(), |req| -> Response {
+        assert_eq!(req.headers["foo"], "bar");
+        Response::fixed_string(200, "heading\r\n")
+    })]);
+
+    let mut res = get_header(port, "/headers", "foo", "bar");
+
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.text().unwrap(), "heading\r\n");
 }
