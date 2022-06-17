@@ -61,6 +61,15 @@ pub struct Response {
     pub body: BodyType,
 }
 
+impl Response {
+    pub fn fixed_string(status: u32, body: &str) -> Self {
+        Response {
+            status,
+            body: BodyType::Fixed(body.as_bytes().to_vec()),
+        }
+    }
+}
+
 pub type RouteFn = fn(query: Option<String>, data: Vec<u8>) -> Response;
 
 struct ParsedFirstLine {

@@ -29,6 +29,18 @@ fn fixed() {
 }
 
 #[test]
+fn from_string() {
+    let (port, _server) = start_server(vec![("/simple".to_string(), |_, _| -> Response {
+        Response::fixed_string(201, "simple\r\n")
+    })]);
+
+    let mut res = get(port, "/simple");
+
+    assert_eq!(res.status(), 201);
+    assert_eq!(res.text().unwrap(), "simple\r\n");
+}
+
+#[test]
 fn chunked() {
     let (port, _server) = start_server(vec![("/chunked".to_string(), |_, _| -> Response {
         Response {
@@ -48,6 +60,19 @@ fn chunked() {
     assert_eq!(res.status(), 200);
     assert_eq!(res.headers()["transfer-encoding"], "chunked");
     assert_eq!(res.text().unwrap(), "Hello\r\nWorld\r\n");
+}
+
+#[test]
+fn query() {
+    let (port, _server) = start_server(vec![("/query".to_string(), |query, _| -> Response {
+        assert_eq!(query.unwrap(), "count&foo=bar");
+        Response::fixed_string(200, "queried\r\n")
+    })]);
+
+    let mut res = get(port, "/query?count&foo=bar");
+
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.text().unwrap(), "queried\r\n");
 }
 
 struct WithTrailers {

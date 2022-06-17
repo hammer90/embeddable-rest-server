@@ -12,10 +12,7 @@ fn empty(_: Option<String>, _: Vec<u8>) -> Response {
 }
 
 fn bad(_: Option<String>, _: Vec<u8>) -> Response {
-    Response {
-        status: 400,
-        body: BodyType::Fixed("This was bad\r\n".as_bytes().to_vec()),
-    }
+    Response::fixed_string(400, "This was bad\r\n")
 }
 
 fn greeting(_: Option<String>, _: Vec<u8>) -> Response {
