@@ -2,20 +2,20 @@ mod lib;
 
 use std::{thread, time::Duration};
 
-use lib::{BodyType, HttpError, Response, RestServer, Streamable};
+use lib::{BodyType, HttpError, Request, Response, RestServer, Streamable};
 
-fn empty(_: Option<String>, _: Vec<u8>) -> Response {
+fn empty(_: Request) -> Response {
     Response {
         status: 204,
         body: BodyType::Fixed(vec![]),
     }
 }
 
-fn bad(_: Option<String>, _: Vec<u8>) -> Response {
+fn bad(_: Request) -> Response {
     Response::fixed_string(400, "This was bad\r\n")
 }
 
-fn greeting(_: Option<String>, _: Vec<u8>) -> Response {
+fn greeting(_: Request) -> Response {
     Response {
         status: 200,
         body: BodyType::Stream(Box::new(
@@ -52,14 +52,11 @@ impl Iterator for SlowResponse {
     }
 }
 
-fn slow(query: Option<String>, _: Vec<u8>) -> Response {
-    let query = query.unwrap_or("10".to_string());
+fn slow(req: Request) -> Response {
+    let query = req.query.unwrap_or("10".to_string());
     let count = query.parse::<usize>();
     if let Err(_) = count {
-        return Response {
-            status: 400,
-            body: BodyType::Fixed("Query should be a number\r\n".as_bytes().to_vec()),
-        };
+        return Response::fixed_string(400, "Query should be a number\r\n");
     }
     Response {
         status: 200,
@@ -104,7 +101,7 @@ impl Streamable for WithTrailers {
     }
 }
 
-fn trailered(_: Option<String>, _: Vec<u8>) -> Response {
+fn trailered(_: Request) -> Response {
     Response {
         status: 200,
         body: BodyType::StreamWithTrailers(Box::new(WithTrailers::new("bar"))),

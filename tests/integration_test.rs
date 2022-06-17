@@ -15,7 +15,7 @@ fn not_found() {
 
 #[test]
 fn fixed() {
-    let (port, _server) = start_server(vec![("/ok".to_string(), |_, _| -> Response {
+    let (port, _server) = start_server(vec![("/ok".to_string(), |_| -> Response {
         Response {
             status: 200,
             body: BodyType::Fixed("fixed\r\n".as_bytes().to_vec()),
@@ -30,7 +30,7 @@ fn fixed() {
 
 #[test]
 fn from_string() {
-    let (port, _server) = start_server(vec![("/simple".to_string(), |_, _| -> Response {
+    let (port, _server) = start_server(vec![("/simple".to_string(), |_| -> Response {
         Response::fixed_string(201, "simple\r\n")
     })]);
 
@@ -42,7 +42,7 @@ fn from_string() {
 
 #[test]
 fn chunked() {
-    let (port, _server) = start_server(vec![("/chunked".to_string(), |_, _| -> Response {
+    let (port, _server) = start_server(vec![("/chunked".to_string(), |_| -> Response {
         Response {
             status: 200,
             body: BodyType::Stream(Box::new(
@@ -64,8 +64,8 @@ fn chunked() {
 
 #[test]
 fn query() {
-    let (port, _server) = start_server(vec![("/query".to_string(), |query, _| -> Response {
-        assert_eq!(query.unwrap(), "count&foo=bar");
+    let (port, _server) = start_server(vec![("/query".to_string(), |req| -> Response {
+        assert_eq!(req.query.unwrap(), "count&foo=bar");
         Response::fixed_string(200, "queried\r\n")
     })]);
 
@@ -110,7 +110,7 @@ impl Streamable for WithTrailers {
 
 #[test]
 fn trailers() {
-    let (port, _server) = start_server(vec![("/trailered".to_string(), |_, _| -> Response {
+    let (port, _server) = start_server(vec![("/trailered".to_string(), |_| -> Response {
         Response {
             status: 200,
             body: BodyType::StreamWithTrailers(Box::new(WithTrailers::new())),

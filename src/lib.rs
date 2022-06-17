@@ -70,7 +70,14 @@ impl Response {
     }
 }
 
-pub type RouteFn = fn(query: Option<String>, data: Vec<u8>) -> Response;
+pub struct Request {
+    pub params: Option<HashMap<String, String>>,
+    pub query: Option<String>,
+    pub headers: Option<HashMap<String, String>>,
+    pub data: Option<Vec<u8>>,
+}
+
+pub type RouteFn = fn(req: Request) -> Response;
 
 struct ParsedFirstLine {
     method: String,
@@ -166,7 +173,12 @@ impl RestServer {
 
             let route_key = format!("{} {}", parsed.method, parsed.path);
             if let Some(route) = self.routes.get(&route_key) {
-                let resp = route(parsed.query, vec![]);
+                let resp = route(Request {
+                    params: None,
+                    query: parsed.query,
+                    headers: None,
+                    data: None,
+                });
 
                 match resp.body {
                     BodyType::Fixed(body) => self.fixed_response(stream, resp.status, &body),
