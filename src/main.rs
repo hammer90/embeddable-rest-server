@@ -2,7 +2,7 @@ mod lib;
 
 use std::{thread, time::Duration};
 
-use lib::{BodyType, HttpError, Request, Response, RestServer, Streamable};
+use lib::{BodyType, HttpError, Request, Response, RestServer, SpawnedRestServer, Streamable};
 
 fn empty(_: Request) -> Response {
     Response {
@@ -114,8 +114,15 @@ fn main() -> Result<(), HttpError> {
         .get("/bad", bad)?
         .get("/greeting", greeting)?
         .get("/slow", slow)?
-        .get("/trailered", trailered)?;
-    server.start()?;
+        .get("/trailered", trailered)?
+        .post("/post", empty)?
+        .put("/put", empty)?
+        .patch("/patch", empty)?
+        .delete("/delete", empty)?;
 
+    let spawned = SpawnedRestServer::spawn(server);
+    thread::sleep(Duration::from_secs(60));
+
+    spawned.stop();
     Ok(())
 }

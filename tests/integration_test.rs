@@ -1,6 +1,6 @@
 mod common;
-use common::{get, get_header, start_server};
-use embeddable_rest_server::{BodyType, Response, Streamable};
+use common::{get, get_header, post, start_server};
+use embeddable_rest_server::{BodyType, HttpVerbs, Response, Streamable};
 use isahc::{ReadResponseExt, ResponseExt};
 
 #[test]
@@ -15,12 +15,13 @@ fn not_found() {
 
 #[test]
 fn fixed() {
-    let (port, _server) = start_server(vec![("/ok".to_string(), |_| -> Response {
-        Response {
-            status: 200,
-            body: BodyType::Fixed("fixed\r\n".as_bytes().to_vec()),
-        }
-    })]);
+    let (port, _server) =
+        start_server(vec![(HttpVerbs::GET, "/ok".to_string(), |_| -> Response {
+            Response {
+                status: 200,
+                body: BodyType::Fixed("fixed\r\n".as_bytes().to_vec()),
+            }
+        })]);
 
     let mut res = get(port, "/ok");
 
@@ -30,9 +31,11 @@ fn fixed() {
 
 #[test]
 fn from_string() {
-    let (port, _server) = start_server(vec![("/simple".to_string(), |_| -> Response {
-        Response::fixed_string(201, "simple\r\n")
-    })]);
+    let (port, _server) = start_server(vec![(
+        HttpVerbs::GET,
+        "/simple".to_string(),
+        |_| -> Response { Response::fixed_string(201, "simple\r\n") },
+    )]);
 
     let mut res = get(port, "/simple");
 
@@ -42,18 +45,22 @@ fn from_string() {
 
 #[test]
 fn chunked() {
-    let (port, _server) = start_server(vec![("/chunked".to_string(), |_| -> Response {
-        Response {
-            status: 200,
-            body: BodyType::Stream(Box::new(
-                [
-                    "Hello\r\n".as_bytes().to_vec(),
-                    "World\r\n".as_bytes().to_vec(),
-                ]
-                .into_iter(),
-            )),
-        }
-    })]);
+    let (port, _server) = start_server(vec![(
+        HttpVerbs::GET,
+        "/chunked".to_string(),
+        |_| -> Response {
+            Response {
+                status: 200,
+                body: BodyType::Stream(Box::new(
+                    [
+                        "Hello\r\n".as_bytes().to_vec(),
+                        "World\r\n".as_bytes().to_vec(),
+                    ]
+                    .into_iter(),
+                )),
+            }
+        },
+    )]);
 
     let mut res = get(port, "/chunked");
 
@@ -64,10 +71,14 @@ fn chunked() {
 
 #[test]
 fn query() {
-    let (port, _server) = start_server(vec![("/query".to_string(), |req| -> Response {
-        assert_eq!(req.query.unwrap(), "count&foo=bar");
-        Response::fixed_string(200, "queried\r\n")
-    })]);
+    let (port, _server) = start_server(vec![(
+        HttpVerbs::GET,
+        "/query".to_string(),
+        |req| -> Response {
+            assert_eq!(req.query.unwrap(), "count&foo=bar");
+            Response::fixed_string(200, "queried\r\n")
+        },
+    )]);
 
     let mut res = get(port, "/query?count&foo=bar");
 
@@ -110,12 +121,16 @@ impl Streamable for WithTrailers {
 
 #[test]
 fn trailers() {
-    let (port, _server) = start_server(vec![("/trailered".to_string(), |_| -> Response {
-        Response {
-            status: 200,
-            body: BodyType::StreamWithTrailers(Box::new(WithTrailers::new())),
-        }
-    })]);
+    let (port, _server) = start_server(vec![(
+        HttpVerbs::GET,
+        "/trailered".to_string(),
+        |_| -> Response {
+            Response {
+                status: 200,
+                body: BodyType::StreamWithTrailers(Box::new(WithTrailers::new())),
+            }
+        },
+    )]);
 
     let mut res = get(port, "/trailered");
 
@@ -128,13 +143,37 @@ fn trailers() {
 
 #[test]
 fn headers() {
-    let (port, _server) = start_server(vec![("/headers".to_string(), |req| -> Response {
-        assert_eq!(req.headers["foo"], "bar");
-        Response::fixed_string(200, "heading\r\n")
-    })]);
+    let (port, _server) = start_server(vec![(
+        HttpVerbs::GET,
+        "/headers".to_string(),
+        |req| -> Response {
+            assert_eq!(req.headers["foo"], "bar");
+            Response::fixed_string(200, "heading\r\n")
+        },
+    )]);
 
     let mut res = get_header(port, "/headers", "foo", "bar");
 
     assert_eq!(res.status(), 200);
     assert_eq!(res.text().unwrap(), "heading\r\n");
+}
+
+#[test]
+fn body() {
+    let (port, _server) = start_server(vec![(
+        HttpVerbs::POST,
+        "/body".to_string(),
+        |req| -> Response {
+            assert_eq!(
+                std::str::from_utf8(req.data.unwrap().as_ref()).unwrap(),
+                "Hello Data"
+            );
+            Response::fixed_string(200, "posted\r\n")
+        },
+    )]);
+
+    let mut res = post(port, "/body", "Hello Data");
+
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.text().unwrap(), "posted\r\n");
 }

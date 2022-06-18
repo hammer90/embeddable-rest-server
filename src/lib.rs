@@ -11,6 +11,9 @@ pub enum ResponseableError {
     UnsupportedVersion(String),
     NotFound(String),
     BadHeader(String),
+    MethodNotImplemented(String),
+    LengthRequired,
+    PayloadToLarge,
     IO(IoError),
 }
 
@@ -101,11 +104,31 @@ pub struct Request {
 
 pub type RouteFn = fn(req: Request) -> Response;
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum HttpVerbs {
+    GET,
+    POST,
+    PUT,
+    DELETE,
+    PATCH,
+}
+
 struct ParsedFirstLine {
-    method: String,
+    method: HttpVerbs,
     path: String,
     query: Option<String>,
     version: String,
+}
+
+fn map_method(method: &str) -> Result<HttpVerbs, ResponseableError> {
+    match method {
+        "GET" => Ok(HttpVerbs::GET),
+        "POST" => Ok(HttpVerbs::POST),
+        "PUT" => Ok(HttpVerbs::PUT),
+        "DELETE" => Ok(HttpVerbs::DELETE),
+        "PATCH" => Ok(HttpVerbs::PATCH),
+        _ => Err(ResponseableError::MethodNotImplemented(method.to_string())),
+    }
 }
 
 impl ParsedFirstLine {
@@ -115,16 +138,17 @@ impl ParsedFirstLine {
             return Err(ResponseableError::NotHttpConform);
         }
         let path_query = splitted[1].split_once('?');
+        let method = map_method(splitted[0])?;
         if let Some((path, query)) = path_query {
             Ok(Self {
-                method: splitted[0].to_string(),
+                method,
                 path: path.to_string(),
                 query: Some(query.to_string()),
                 version: splitted[2].to_string(),
             })
         } else {
             Ok(Self {
-                method: splitted[0].to_string(),
+                method,
                 path: splitted[1].to_string(),
                 query: None,
                 version: splitted[2].to_string(),
@@ -144,7 +168,10 @@ fn parse_headers(
             break;
         }
         if let Some((name, value)) = header.split_once(':') {
-            headers.insert(name.to_string(), value[1..(value.len() - 2)].to_string());
+            headers.insert(
+                name.to_string().to_lowercase(),
+                value[1..(value.len() - 2)].to_string(),
+            );
         } else {
             return Err(ResponseableError::BadHeader(header));
         }
@@ -191,12 +218,38 @@ impl RestServer {
         Ok(())
     }
 
-    pub fn get(mut self, route: &str, func: RouteFn) -> Result<Self, HttpError> {
-        if let Some(_) = self.routes.get(route) {
+    pub fn register(
+        mut self,
+        verb: HttpVerbs,
+        route: &str,
+        func: RouteFn,
+    ) -> Result<Self, HttpError> {
+        let route = format!("{:?} {}", verb, route);
+        if let Some(_) = self.routes.get(route.as_str()) {
             return Err(HttpError::RouteExists);
         }
-        self.routes.insert(format!("GET {}", route), func);
+        self.routes.insert(route, func);
         Ok(self)
+    }
+
+    pub fn get(self, route: &str, func: RouteFn) -> Result<Self, HttpError> {
+        self.register(HttpVerbs::GET, route, func)
+    }
+
+    pub fn post(self, route: &str, func: RouteFn) -> Result<Self, HttpError> {
+        self.register(HttpVerbs::POST, route, func)
+    }
+
+    pub fn put(self, route: &str, func: RouteFn) -> Result<Self, HttpError> {
+        self.register(HttpVerbs::PUT, route, func)
+    }
+
+    pub fn delete(self, route: &str, func: RouteFn) -> Result<Self, HttpError> {
+        self.register(HttpVerbs::DELETE, route, func)
+    }
+
+    pub fn patch(self, route: &str, func: RouteFn) -> Result<Self, HttpError> {
+        self.register(HttpVerbs::PATCH, route, func)
     }
 
     fn handle_connection_witherrors(&self, stream: TcpStream) -> Result<(), HttpError> {
@@ -207,12 +260,45 @@ impl RestServer {
                 ResponseableError::UnsupportedVersion(version) => {
                     self.send_unsupported_version(stream, version)
                 }
+                ResponseableError::MethodNotImplemented(method) => {
+                    self.send_method_not_implemented(stream, method)
+                }
                 ResponseableError::NotFound(path) => self.send_not_found(stream, path),
                 ResponseableError::BadHeader(_) => self.send_bad_headers(stream),
+                ResponseableError::LengthRequired => self.send_length_required(stream),
+                ResponseableError::PayloadToLarge => self.send_payload_to_large(stream),
                 ResponseableError::IO(_) => self.send_io_error(stream),
             },
             result => result,
         }
+    }
+
+    fn extract_length(
+        &self,
+        headers: &HashMap<String, String>,
+    ) -> Result<usize, ResponseableError> {
+        if !headers.contains_key("content-length") {
+            return Err(ResponseableError::LengthRequired);
+        }
+        let len = headers["content-length"].as_str().parse::<usize>();
+        match len {
+            Err(_) => Err(ResponseableError::LengthRequired),
+            Ok(len) => Ok(len),
+        }
+    }
+
+    fn parse_body(
+        &self,
+        reader: &mut BufReader<TcpStream>,
+        headers: &HashMap<String, String>,
+    ) -> Result<Vec<u8>, HttpError> {
+        let len = self.extract_length(headers)?;
+        if len > 1024 {
+            return Err(ResponseableError::PayloadToLarge)?;
+        }
+        let mut buf = vec![0 as u8; len];
+        reader.read(&mut buf)?;
+        Ok(buf)
     }
 
     fn handle_connection(&self, stream: &TcpStream) -> Result<(), HttpError> {
@@ -227,18 +313,27 @@ impl RestServer {
             return Err(ResponseableError::UnsupportedVersion(parsed.version))?;
         }
 
-        let route_key = format!("{} {}", parsed.method, parsed.path);
+        let route_key = format!("{:?} {}", parsed.method, parsed.path);
         let route = self
             .routes
             .get(&route_key)
             .ok_or(ResponseableError::NotFound(parsed.path))?;
 
         let headers = parse_headers(&mut reader)?;
+
+        let mut data = None;
+        if parsed.method == HttpVerbs::PATCH
+            || parsed.method == HttpVerbs::POST
+            || parsed.method == HttpVerbs::PUT
+        {
+            data = Some(self.parse_body(&mut reader, &headers)?)
+        }
+
         let resp = route(Request {
             params: None,
             query: parsed.query,
             headers,
-            data: None,
+            data,
         });
 
         match resp.body {
@@ -255,6 +350,20 @@ impl RestServer {
             &stream,
             400,
             &"Not HTTP conform request\r\n".as_bytes().to_vec(),
+        )
+    }
+
+    fn send_method_not_implemented(
+        &self,
+        stream: TcpStream,
+        method: String,
+    ) -> Result<(), HttpError> {
+        self.fixed_response(
+            &stream,
+            501,
+            &format!("Method {} not implemented\r\n", method)
+                .as_bytes()
+                .to_vec(),
         )
     }
 
@@ -282,6 +391,14 @@ impl RestServer {
 
     fn send_bad_headers(&self, stream: TcpStream) -> Result<(), HttpError> {
         self.fixed_response(&stream, 400, &"Invalid header data\r\n".as_bytes().to_vec())
+    }
+
+    fn send_length_required(&self, stream: TcpStream) -> Result<(), HttpError> {
+        self.fixed_response(&stream, 411, &"Include length\r\n".as_bytes().to_vec())
+    }
+
+    fn send_payload_to_large(&self, stream: TcpStream) -> Result<(), HttpError> {
+        self.fixed_response(&stream, 413, &"Payload to large\r\n".as_bytes().to_vec())
     }
 
     fn send_not_found(&self, stream: TcpStream, path: String) -> Result<(), HttpError> {
