@@ -167,10 +167,10 @@ fn parse_headers(
         if len == 0 || header == "\r\n" {
             break;
         }
-        if let Some((name, value)) = header.split_once(':') {
+        if let Some((name, value)) = header.split_once(": ") {
             headers.insert(
                 name.to_string().to_lowercase(),
-                value[1..(value.len() - 2)].to_string(),
+                value[0..(value.len() - 2)].to_string(),
             );
         } else {
             return Err(ResponseableError::BadHeader(header));
