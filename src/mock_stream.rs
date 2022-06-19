@@ -24,3 +24,33 @@ impl Read for MockReadableStream {
         Ok(count)
     }
 }
+
+mod tests {
+    use std::io::BufReader;
+
+    use super::*;
+
+    #[test]
+    fn merges_with_newline() {
+        let stream = MockReadableStream::new(vec!["123", "456", ""]);
+        let mut reader = BufReader::new(stream);
+
+        let mut buf = String::new();
+        let count = reader.read_to_string(&mut buf).unwrap();
+
+        assert_eq!(count, 10);
+        assert_eq!(buf, "123\r\n456\r\n");
+    }
+
+    #[test]
+    fn handles_small_chunks() {
+        let stream = MockReadableStream::new(vec!["1234567890", "1234567890", ""]);
+        let mut reader = BufReader::with_capacity(5, stream);
+
+        let mut buf = String::new();
+        let count = reader.read_to_string(&mut buf).unwrap();
+
+        assert_eq!(count, 24);
+        assert_eq!(buf, "1234567890\r\n1234567890\r\n");
+    }
+}
