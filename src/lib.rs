@@ -1,3 +1,5 @@
+mod parsed_first_line;
+
 use std::collections::HashMap;
 use std::io::{prelude::*, BufReader, Error as IoError};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
@@ -5,7 +7,9 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-#[derive(Debug)]
+use parsed_first_line::ParsedFirstLine;
+
+#[derive(Debug, PartialEq, Eq)]
 pub enum ResponseableError {
     NotHttpConform,
     UnsupportedVersion(String),
@@ -14,7 +18,7 @@ pub enum ResponseableError {
     MethodNotImplemented(String),
     LengthRequired,
     PayloadToLarge,
-    IO(IoError),
+    IO,
 }
 
 #[derive(Debug)]
@@ -25,8 +29,8 @@ pub enum HttpError {
 }
 
 impl From<IoError> for ResponseableError {
-    fn from(err: IoError) -> ResponseableError {
-        ResponseableError::IO(err)
+    fn from(_: IoError) -> ResponseableError {
+        ResponseableError::IO
     }
 }
 
@@ -113,46 +117,15 @@ pub enum HttpVerbs {
     PATCH,
 }
 
-struct ParsedFirstLine {
-    method: HttpVerbs,
-    path: String,
-    query: Option<String>,
-    version: String,
-}
-
-fn map_method(method: &str) -> Result<HttpVerbs, ResponseableError> {
-    match method {
-        "GET" => Ok(HttpVerbs::GET),
-        "POST" => Ok(HttpVerbs::POST),
-        "PUT" => Ok(HttpVerbs::PUT),
-        "DELETE" => Ok(HttpVerbs::DELETE),
-        "PATCH" => Ok(HttpVerbs::PATCH),
-        _ => Err(ResponseableError::MethodNotImplemented(method.to_string())),
-    }
-}
-
-impl ParsedFirstLine {
-    fn parse(line: String) -> Result<Self, ResponseableError> {
-        let splitted: Vec<&str> = line.split(' ').collect();
-        if splitted.len() != 3 {
-            return Err(ResponseableError::NotHttpConform);
-        }
-        let path_query = splitted[1].split_once('?');
-        let method = map_method(splitted[0])?;
-        if let Some((path, query)) = path_query {
-            Ok(Self {
-                method,
-                path: path.to_string(),
-                query: Some(query.to_string()),
-                version: splitted[2].to_string(),
-            })
-        } else {
-            Ok(Self {
-                method,
-                path: splitted[1].to_string(),
-                query: None,
-                version: splitted[2].to_string(),
-            })
+impl HttpVerbs {
+    fn map_method(method: &str) -> Result<Self, ResponseableError> {
+        match method {
+            "GET" => Ok(HttpVerbs::GET),
+            "POST" => Ok(HttpVerbs::POST),
+            "PUT" => Ok(HttpVerbs::PUT),
+            "DELETE" => Ok(HttpVerbs::DELETE),
+            "PATCH" => Ok(HttpVerbs::PATCH),
+            _ => Err(ResponseableError::MethodNotImplemented(method.to_string())),
         }
     }
 }
@@ -267,7 +240,7 @@ impl RestServer {
                 ResponseableError::BadHeader(_) => self.send_bad_headers(stream),
                 ResponseableError::LengthRequired => self.send_length_required(stream),
                 ResponseableError::PayloadToLarge => self.send_payload_to_large(stream),
-                ResponseableError::IO(_) => self.send_io_error(stream),
+                ResponseableError::IO => self.send_io_error(stream),
             },
             result => result,
         }
