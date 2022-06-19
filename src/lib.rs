@@ -1,4 +1,8 @@
+mod headers;
 mod parsed_first_line;
+
+#[cfg(test)]
+mod mock_stream;
 
 use std::collections::HashMap;
 use std::io::{prelude::*, BufReader, Error as IoError};
@@ -7,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use headers::parse_headers;
 use parsed_first_line::ParsedFirstLine;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -128,28 +133,6 @@ impl HttpVerbs {
             _ => Err(ResponseableError::MethodNotImplemented(method.to_string())),
         }
     }
-}
-
-fn parse_headers(
-    reader: &mut BufReader<TcpStream>,
-) -> Result<HashMap<String, String>, ResponseableError> {
-    let mut headers = HashMap::new();
-    loop {
-        let mut header = String::new();
-        let len = reader.read_line(&mut header)?;
-        if len == 0 || header == "\r\n" {
-            break;
-        }
-        if let Some((name, value)) = header.split_once(": ") {
-            headers.insert(
-                name.to_string().to_lowercase(),
-                value[0..(value.len() - 2)].to_string(),
-            );
-        } else {
-            return Err(ResponseableError::BadHeader(header));
-        }
-    }
-    Ok(headers)
 }
 
 pub struct RestServer {
@@ -275,7 +258,7 @@ impl RestServer {
     }
 
     fn handle_connection(&self, stream: &TcpStream) -> Result<(), HttpError> {
-        let mut reader = BufReader::new(stream.try_clone()?);
+        let mut reader = BufReader::with_capacity(1024, stream.try_clone()?);
         let mut start = String::new();
         let len = reader.read_line(&mut start)?;
         if len == 0 {
