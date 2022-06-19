@@ -1,4 +1,4 @@
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Route<'a, T> {
     key: &'a str,
     item: Option<&'a T>,
@@ -92,7 +92,7 @@ impl<'a, T> Route<'a, T> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Routes<'a, T> {
     routes: Vec<Route<'a, T>>,
 }
@@ -179,8 +179,8 @@ mod tests {
         let route = Route::new("/A/B", &0);
         assert_eq!(route.find("/C"), None);
         assert_eq!(
-            route.find("/A").unwrap().to_owned(),
-            Route {
+            route.find("/A").unwrap(),
+            &Route {
                 key: "A",
                 item: None,
                 childs: vec![Route {
@@ -191,8 +191,8 @@ mod tests {
             }
         );
         assert_eq!(
-            route.find("/A/B").unwrap().to_owned(),
-            Route {
+            route.find("/A/B").unwrap(),
+            &Route {
                 key: "B",
                 item: Some(&0),
                 childs: vec![]
