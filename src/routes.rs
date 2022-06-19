@@ -313,4 +313,25 @@ mod tests {
             }
         )
     }
+
+    #[test]
+    fn add_index() {
+        let routes: Routes<u32> = Routes::new();
+        let routes = routes.add("/A/B", &0).unwrap();
+        let routes = routes.add("/A", &1).unwrap();
+        assert_eq!(
+            routes,
+            Routes {
+                routes: vec![Route {
+                    key: "A",
+                    item: Some(&1),
+                    childs: vec![Route {
+                        key: "B",
+                        item: Some(&0),
+                        childs: vec![]
+                    }]
+                },]
+            }
+        )
+    }
 }
