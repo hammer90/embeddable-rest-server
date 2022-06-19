@@ -1,5 +1,6 @@
 mod headers;
 mod parsed_first_line;
+mod routes;
 mod status_text;
 
 #[cfg(test)]
