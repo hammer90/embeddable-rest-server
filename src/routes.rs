@@ -5,6 +5,14 @@ pub struct Route<'a, T> {
     childs: Vec<Route<'a, T>>,
 }
 
+fn split_head(org: &str) -> (&str, &str) {
+    if let Some((head, rest)) = org.split_once('/') {
+        (head, rest)
+    } else {
+        (org, "")
+    }
+}
+
 impl<'a, T> Route<'a, T> {
     pub fn root() -> Self {
         Self {
@@ -51,39 +59,65 @@ impl<'a, T> Route<'a, T> {
     }
 
     pub fn add(self, path: &'a str, item: &'a T) -> Result<Route<'a, T>, ()> {
-        let path = uniform_path(path);
-        if let Some((curr, rest)) = path.split_once('/') {
-            let mut new_childs = vec![];
-            let mut added = false;
-            for child in self.childs {
-                if child.key == curr {
-                    println!("{} == {}", child.key, curr);
-                    new_childs.push(child.add(rest, item)?);
-                    added = true;
-                } else {
-                    println!("{} != {}", child.key, curr);
-                    new_childs.push(child);
-                }
-            }
-            if !added {
-                new_childs.push(Route::new(rest, item));
-            }
-            return Ok(Route {
-                key: self.key,
-                item: self.item,
-                childs: new_childs,
-            });
-        } else {
-            debug_assert_eq!(self.key, path);
+        if path == "" {
             if let Some(_) = self.item {
                 return Err(());
+            } else {
+                return Ok(Route {
+                    key: self.key,
+                    item: Some(item),
+                    childs: self.childs,
+                });
             }
-            return Ok(Route {
-                key: self.key,
-                item: Some(item),
-                childs: self.childs,
-            });
         }
+        let (curr, rest) = split_head(path);
+        let mut new_childs = vec![];
+        let mut added = false;
+        for child in self.childs {
+            if child.key == curr {
+                new_childs.push(child.add(rest, item)?);
+                added = true;
+            } else {
+                new_childs.push(child);
+            }
+        }
+        if !added {
+            new_childs.push(Route::new(path, item));
+        }
+        return Ok(Route {
+            key: self.key,
+            item: self.item,
+            childs: new_childs,
+        });
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Routes<'a, T> {
+    routes: Vec<Route<'a, T>>,
+}
+
+impl<'a, T> Routes<'a, T> {
+    fn new() -> Self {
+        Self { routes: vec![] }
+    }
+
+    fn add(self, path: &'a str, item: &'a T) -> Result<Self, ()> {
+        let mut routes = vec![];
+        let (curr, rest) = split_head(uniform_path(path));
+        let mut added = false;
+        for route in self.routes {
+            if route.key == curr {
+                routes.push(route.add(rest, item)?);
+                added = true;
+            } else {
+                routes.push(route);
+            }
+        }
+        if !added {
+            routes.push(Route::new(path, item));
+        }
+        Ok(Routes { routes })
     }
 }
 
@@ -169,14 +203,12 @@ mod tests {
 
     #[test]
     fn add_first() {
-        let root: Route<u32> = Route::root();
-        let route = root.add("root/A", &0).unwrap();
+        let routes: Routes<u32> = Routes::new();
+        let routes = routes.add("/A", &0).unwrap();
         assert_eq!(
-            route,
-            Route {
-                key: "",
-                item: None,
-                childs: vec![Route {
+            routes,
+            Routes {
+                routes: vec![Route {
                     key: "A",
                     item: Some(&0),
                     childs: vec![]
@@ -187,14 +219,12 @@ mod tests {
 
     #[test]
     fn add_first_deep() {
-        let root: Route<u32> = Route::root();
-        let route = root.add("root/A/B", &0).unwrap();
+        let routes: Routes<u32> = Routes::new();
+        let routes = routes.add("/A/B", &0).unwrap();
         assert_eq!(
-            route,
-            Route {
-                key: "",
-                item: None,
-                childs: vec![Route {
+            routes,
+            Routes {
+                routes: vec![Route {
                     key: "A",
                     item: None,
                     childs: vec![Route {
@@ -209,15 +239,13 @@ mod tests {
 
     #[test]
     fn add_second() {
-        let root: Route<u32> = Route::root();
-        let route1 = root.add("root/A", &0).unwrap();
-        let route2 = route1.add("root/B", &1).unwrap();
+        let routes: Routes<u32> = Routes::new();
+        let routes = routes.add("/A", &0).unwrap();
+        let routes = routes.add("/B", &1).unwrap();
         assert_eq!(
-            route2,
-            Route {
-                key: "",
-                item: None,
-                childs: vec![
+            routes,
+            Routes {
+                routes: vec![
                     Route {
                         key: "A",
                         item: Some(&0),
@@ -235,15 +263,13 @@ mod tests {
 
     #[test]
     fn add_second_deep() {
-        let root: Route<u32> = Route::root();
-        let route1 = root.add("root/A/B", &0).unwrap();
-        let route2 = route1.add("root/A/C", &1).unwrap();
+        let routes: Routes<u32> = Routes::new();
+        let routes = routes.add("/A/B", &0).unwrap();
+        let routes = routes.add("/A/C", &1).unwrap();
         assert_eq!(
-            route2,
-            Route {
-                key: "",
-                item: None,
-                childs: vec![Route {
+            routes,
+            Routes {
+                routes: vec![Route {
                     key: "A",
                     item: None,
                     childs: vec![
@@ -258,55 +284,33 @@ mod tests {
                             childs: vec![]
                         }
                     ]
-                }]
+                },]
             }
         )
     }
 
     #[test]
-    fn add_sibling() {
-        let route = Route::new("/A/B", &0);
-        let added = route.add("/A/C", &1).unwrap();
+    fn add_child() {
+        let routes: Routes<u32> = Routes::new();
+        let routes = routes.add("/A/B", &0).unwrap();
+        let routes = routes.add("/A/B/C", &1).unwrap();
         assert_eq!(
-            added,
-            Route {
-                key: "A",
-                item: None,
-                childs: vec![
-                    Route {
+            routes,
+            Routes {
+                routes: vec![Route {
+                    key: "A",
+                    item: None,
+                    childs: vec![Route {
                         key: "B",
                         item: Some(&0),
-                        childs: vec![]
-                    },
-                    Route {
-                        key: "C",
-                        item: Some(&1),
-                        childs: vec![]
-                    },
-                ]
-            }
-        );
-    }
-
-    #[test]
-    fn add_child() {
-        let route = Route::new("/A/B", &0);
-        let added = route.add("/A/B/C", &1).unwrap();
-        assert_eq!(
-            added,
-            Route {
-                key: "A",
-                item: None,
-                childs: vec![Route {
-                    key: "B",
-                    item: Some(&0),
-                    childs: vec![Route {
-                        key: "C",
-                        item: Some(&1),
-                        childs: vec![]
+                        childs: vec![Route {
+                            key: "C",
+                            item: Some(&1),
+                            childs: vec![]
+                        }]
                     }]
                 },]
             }
-        );
+        )
     }
 }
