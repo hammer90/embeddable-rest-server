@@ -139,10 +139,11 @@ pub struct RestServer {
     listener: TcpListener,
     routes: HashMap<String, RouteFn>,
     shutdown: Arc<Mutex<bool>>,
+    buf_size: usize,
 }
 
 impl RestServer {
-    pub fn new<A>(addr: A) -> Result<Self, HttpError>
+    pub fn new<A>(addr: A, buf_size: usize) -> Result<Self, HttpError>
     where
         A: ToSocketAddrs,
     {
@@ -153,6 +154,7 @@ impl RestServer {
             listener,
             routes: HashMap::new(),
             shutdown,
+            buf_size,
         })
     }
 
@@ -249,7 +251,7 @@ impl RestServer {
         headers: &HashMap<String, String>,
     ) -> Result<Vec<u8>, HttpError> {
         let len = self.extract_length(headers)?;
-        if len > 1024 {
+        if len > self.buf_size {
             return Err(ResponseableError::PayloadToLarge)?;
         }
         let mut buf = vec![0 as u8; len];
@@ -258,7 +260,7 @@ impl RestServer {
     }
 
     fn handle_connection(&self, stream: &TcpStream) -> Result<(), HttpError> {
-        let mut reader = BufReader::with_capacity(1024, stream.try_clone()?);
+        let mut reader = BufReader::with_capacity(self.buf_size, stream.try_clone()?);
         let mut start = String::new();
         let len = reader.read_line(&mut start)?;
         if len == 0 {

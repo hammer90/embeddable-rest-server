@@ -11,7 +11,7 @@ fn setup_server(
     port: u16,
     routes: Vec<(HttpVerbs, String, RouteFn)>,
 ) -> Result<RestServer, HttpError> {
-    let mut server = RestServer::new(format!("0.0.0.0:{}", port))?;
+    let mut server = RestServer::new(format!("0.0.0.0:{}", port), 1024)?;
 
     for (verb, route, func) in routes {
         server = server.register(verb, route.as_str(), func)?;
