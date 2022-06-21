@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use headers::parse_headers;
 use parsed_first_line::ParsedFirstLine;
+use routes::{Routes, RoutesError};
 use status_text::status_text;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -51,6 +52,12 @@ impl From<IoError> for HttpError {
 impl From<ResponseableError> for HttpError {
     fn from(err: ResponseableError) -> HttpError {
         HttpError::Responseable(err)
+    }
+}
+
+impl From<RoutesError> for HttpError {
+    fn from(_: RoutesError) -> HttpError {
+        HttpError::RouteExists
     }
 }
 
@@ -138,9 +145,68 @@ impl HttpVerbs {
     }
 }
 
+struct HttpRoutes {
+    get: Routes<RouteFn>,
+    post: Routes<RouteFn>,
+    put: Routes<RouteFn>,
+    patch: Routes<RouteFn>,
+    delete: Routes<RouteFn>,
+}
+
+impl HttpRoutes {
+    fn new() -> Self {
+        Self {
+            get: Routes::<RouteFn>::new(),
+            post: Routes::<RouteFn>::new(),
+            put: Routes::<RouteFn>::new(),
+            patch: Routes::<RouteFn>::new(),
+            delete: Routes::<RouteFn>::new(),
+        }
+    }
+
+    fn add(self, verb: HttpVerbs, route: &str, func: RouteFn) -> Result<Self, RoutesError> {
+        match verb {
+            HttpVerbs::GET => Ok(Self {
+                get: self.get.add(route, func)?,
+                ..self
+            }),
+            HttpVerbs::POST => Ok(Self {
+                post: self.post.add(route, func)?,
+                ..self
+            }),
+            HttpVerbs::PUT => Ok(Self {
+                put: self.put.add(route, func)?,
+                ..self
+            }),
+            HttpVerbs::PATCH => Ok(Self {
+                patch: self.patch.add(route, func)?,
+                ..self
+            }),
+            HttpVerbs::DELETE => Ok(Self {
+                delete: self.delete.add(route, func)?,
+                ..self
+            }),
+        }
+    }
+
+    fn find_verb(&self, verb: &HttpVerbs) -> &Routes<RouteFn> {
+        match verb {
+            HttpVerbs::GET => &self.get,
+            HttpVerbs::POST => &self.post,
+            HttpVerbs::PUT => &self.put,
+            HttpVerbs::PATCH => &self.patch,
+            HttpVerbs::DELETE => &self.delete,
+        }
+    }
+
+    fn find(&self, verb: &HttpVerbs, route: &str) -> Option<RouteFn> {
+        self.find_verb(verb).find(route)
+    }
+}
+
 pub struct RestServer {
     listener: TcpListener,
-    routes: HashMap<String, RouteFn>,
+    routes: HttpRoutes,
     shutdown: Arc<Mutex<bool>>,
     buf_size: usize,
 }
@@ -155,7 +221,7 @@ impl RestServer {
         let shutdown = Arc::new(Mutex::new(false));
         Ok(Self {
             listener,
-            routes: HashMap::new(),
+            routes: HttpRoutes::new(),
             shutdown,
             buf_size,
         })
@@ -179,18 +245,11 @@ impl RestServer {
         Ok(())
     }
 
-    pub fn register(
-        mut self,
-        verb: HttpVerbs,
-        route: &str,
-        func: RouteFn,
-    ) -> Result<Self, HttpError> {
-        let route = format!("{:?} {}", verb, route);
-        if let Some(_) = self.routes.get(route.as_str()) {
-            return Err(HttpError::RouteExists);
-        }
-        self.routes.insert(route, func);
-        Ok(self)
+    pub fn register(self, verb: HttpVerbs, route: &str, func: RouteFn) -> Result<Self, HttpError> {
+        Ok(Self {
+            routes: self.routes.add(verb, route, func)?,
+            ..self
+        })
     }
 
     pub fn get(self, route: &str, func: RouteFn) -> Result<Self, HttpError> {
@@ -274,10 +333,9 @@ impl RestServer {
             return Err(ResponseableError::UnsupportedVersion(parsed.version))?;
         }
 
-        let route_key = format!("{:?} {}", parsed.method, parsed.path);
         let route = self
             .routes
-            .get(&route_key)
+            .find(&parsed.method, &parsed.path)
             .ok_or(ResponseableError::NotFound(parsed.path))?;
 
         let headers = parse_headers(&mut reader)?;
