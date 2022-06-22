@@ -100,21 +100,19 @@ impl<T: Copy> Route<T> {
                     }
                 }
             }
-        } else {
-            if self.key.search_eq(path) {
-                let mut params = HashMap::new();
-                if let RouteTyp::Param(param) = &self.key {
-                    params.insert(param[1..].to_string(), path.to_string());
-                }
-                return Some((self, params));
+        } else if self.key.search_eq(path) {
+            let mut params = HashMap::new();
+            if let RouteTyp::Param(param) = &self.key {
+                params.insert(param[1..].to_string(), path.to_string());
             }
+            return Some((self, params));
         }
         None
     }
 
     fn add(self, path: &str, item: T) -> Result<Route<T>, RoutesError> {
-        if path == "" {
-            if let Some(_) = self.item {
+        if path.is_empty() {
+            if self.item.is_some() {
                 return Err(RoutesError::RouteExists);
             } else {
                 return Ok(Route {
@@ -138,11 +136,11 @@ impl<T: Copy> Route<T> {
         if !added {
             new_childs.push(Route::new(path, item));
         }
-        return Ok(Route {
+        Ok(Route {
             key: self.key,
             item: self.item,
             childs: new_childs,
-        });
+        })
     }
 }
 
@@ -182,7 +180,7 @@ impl<T: Copy> Routes<T> {
 }
 
 fn uniform_path(path: &str) -> &str {
-    if path == "" || path == "/" {
+    if path.is_empty() || path == "/" {
         return "";
     }
     let start = if path.starts_with('/') { 1 } else { 0 };

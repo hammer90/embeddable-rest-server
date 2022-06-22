@@ -314,10 +314,10 @@ impl RestServer {
     ) -> Result<Vec<u8>, HttpError> {
         let len = self.extract_length(headers)?;
         if len > self.buf_size {
-            return Err(ResponseableError::PayloadToLarge)?;
+            return Err(ResponseableError::PayloadToLarge.into());
         }
-        let mut buf = vec![0 as u8; len];
-        reader.read(&mut buf)?;
+        let mut buf = vec![0_u8; len];
+        reader.read_exact(&mut buf)?;
         Ok(buf)
     }
 
@@ -326,11 +326,11 @@ impl RestServer {
         let mut start = String::new();
         let len = reader.read_line(&mut start)?;
         if len == 0 {
-            return Err(ResponseableError::NotHttpConform)?;
+            return Err(ResponseableError::NotHttpConform.into());
         }
         let parsed = ParsedFirstLine::parse(start)?;
         if !parsed.version.starts_with("HTTP/1.1") {
-            return Err(ResponseableError::UnsupportedVersion(parsed.version))?;
+            return Err(ResponseableError::UnsupportedVersion(parsed.version).into());
         }
 
         let route = self
@@ -365,11 +365,7 @@ impl RestServer {
     }
 
     fn send_not_http_conform_request(&self, stream: TcpStream) -> Result<(), HttpError> {
-        self.fixed_response(
-            &stream,
-            400,
-            &"Not HTTP conform request\r\n".as_bytes().to_vec(),
-        )
+        self.fixed_response(&stream, 400, "Not HTTP conform request\r\n".as_bytes())
     }
 
     fn send_method_not_implemented(
@@ -380,9 +376,7 @@ impl RestServer {
         self.fixed_response(
             &stream,
             501,
-            &format!("Method {} not implemented\r\n", method)
-                .as_bytes()
-                .to_vec(),
+            format!("Method {} not implemented\r\n", method).as_bytes(),
         )
     }
 
@@ -394,39 +388,31 @@ impl RestServer {
         self.fixed_response(
             &stream,
             505,
-            &format!("Verion {} not supported\r\n", version)
-                .as_bytes()
-                .to_vec(),
+            format!("Verion {} not supported\r\n", version).as_bytes(),
         )
     }
 
     fn send_io_error(&self, stream: TcpStream) -> Result<(), HttpError> {
-        self.fixed_response(
-            &stream,
-            400,
-            &"IO Error while reading\r\n".as_bytes().to_vec(),
-        )
+        self.fixed_response(&stream, 400, "IO Error while reading\r\n".as_bytes())
     }
 
     fn send_bad_headers(&self, stream: TcpStream) -> Result<(), HttpError> {
-        self.fixed_response(&stream, 400, &"Invalid header data\r\n".as_bytes().to_vec())
+        self.fixed_response(&stream, 400, "Invalid header data\r\n".as_bytes())
     }
 
     fn send_length_required(&self, stream: TcpStream) -> Result<(), HttpError> {
-        self.fixed_response(&stream, 411, &"Include length\r\n".as_bytes().to_vec())
+        self.fixed_response(&stream, 411, "Include length\r\n".as_bytes())
     }
 
     fn send_payload_to_large(&self, stream: TcpStream) -> Result<(), HttpError> {
-        self.fixed_response(&stream, 413, &"Payload to large\r\n".as_bytes().to_vec())
+        self.fixed_response(&stream, 413, "Payload to large\r\n".as_bytes())
     }
 
     fn send_not_found(&self, stream: TcpStream, path: String) -> Result<(), HttpError> {
         self.fixed_response(
             &stream,
             404,
-            &format!("Route {} does not exists\r\n", path)
-                .as_bytes()
-                .to_vec(),
+            format!("Route {} does not exists\r\n", path).as_bytes(),
         )
     }
 
@@ -442,31 +428,31 @@ impl RestServer {
             status_text(status),
         );
 
-        stream.write(start.as_bytes())?;
+        stream.write_all(start.as_bytes())?;
         let trailer_names = body.trailer_names();
-        let has_trailers = trailer_names.len() > 0;
+        let has_trailers = !trailer_names.is_empty();
         if has_trailers {
-            stream.write(format!("Trailers: {}\r\n", trailer_names.join(",")).as_bytes())?;
+            stream.write_all(format!("Trailers: {}\r\n", trailer_names.join(",")).as_bytes())?;
         }
-        stream.write("\r\n".as_bytes())?;
+        stream.write_all("\r\n".as_bytes())?;
         stream.flush()?;
 
-        while let Some(data) = body.next() {
+        for data in body.by_ref() {
             let chunk_head = format!("{:x}\r\n", data.len());
-            stream.write(chunk_head.as_bytes())?;
-            stream.write(&data)?;
-            stream.write("\r\n".as_bytes())?;
+            stream.write_all(chunk_head.as_bytes())?;
+            stream.write_all(&data)?;
+            stream.write_all("\r\n".as_bytes())?;
             stream.flush()?;
         }
 
-        stream.write("0\r\n".as_bytes())?;
+        stream.write_all("0\r\n".as_bytes())?;
         if has_trailers {
             let trailers = body.trailers();
             for trailer in trailers {
-                stream.write(format!("{}: {}\r\n", trailer.0, trailer.1).as_bytes())?;
+                stream.write_all(format!("{}: {}\r\n", trailer.0, trailer.1).as_bytes())?;
             }
         }
-        stream.write("\r\n".as_bytes())?;
+        stream.write_all("\r\n".as_bytes())?;
         stream.flush()?;
 
         Ok(())
@@ -476,7 +462,7 @@ impl RestServer {
         &self,
         mut stream: &TcpStream,
         status: u32,
-        body: &Vec<u8>,
+        body: &[u8],
     ) -> Result<(), HttpError> {
         let start = format!(
             "HTTP/1.1 {} {}\r\nContent-Length: {}\r\n\r\n",
@@ -484,8 +470,8 @@ impl RestServer {
             status_text(status),
             body.len()
         );
-        stream.write(start.as_bytes())?;
-        stream.write(&body)?;
+        stream.write_all(start.as_bytes())?;
+        stream.write_all(body)?;
         stream.flush()?;
 
         Ok(())
