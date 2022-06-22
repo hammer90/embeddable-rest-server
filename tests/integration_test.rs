@@ -177,3 +177,23 @@ fn body() {
     assert_eq!(res.status(), 200);
     assert_eq!(res.text().unwrap(), "posted\r\n");
 }
+
+#[test]
+fn params() {
+    let (port, _server) = start_server(vec![(
+        HttpVerbs::GET,
+        "/param/:foo/size".to_string(),
+        |req| -> Response {
+            assert_eq!(req.params["foo"], "bar");
+            Response::fixed_string(
+                200,
+                format!("size: {}\r\n", req.params["foo"].len()).as_str(),
+            )
+        },
+    )]);
+
+    let mut res = get(port, "/param/bar/size");
+
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.text().unwrap(), "size: 3\r\n");
+}

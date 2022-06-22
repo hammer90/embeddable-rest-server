@@ -1,13 +1,63 @@
+use std::collections::HashMap;
+
+#[derive(Debug, PartialEq, Eq)]
+enum RouteTyp {
+    Fixed(String),
+    Param(String),
+}
+
+impl From<&str> for RouteTyp {
+    fn from(s: &str) -> Self {
+        if s.starts_with(':') {
+            Self::Param(s.to_string())
+        } else {
+            Self::Fixed(s.to_string())
+        }
+    }
+}
+
+impl RouteTyp {
+    fn search_eq(&self, other: &str) -> bool {
+        match self {
+            Self::Fixed(fixed) => fixed == other,
+            Self::Param(param) => {
+                if other.starts_with(':') {
+                    param == other
+                } else {
+                    true
+                }
+            }
+        }
+    }
+
+    fn add_eq(&self, other: &str) -> Result<bool, RoutesError> {
+        match self {
+            Self::Fixed(fixed) => Ok(fixed == other),
+            Self::Param(param) => {
+                if param == other {
+                    Ok(true)
+                } else {
+                    Err(RoutesError::ParamMismatch(
+                        param.to_string(),
+                        other.to_string(),
+                    ))
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct Route<T> {
-    key: String,
+    key: RouteTyp,
     item: Option<T>,
     childs: Vec<Route<T>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum RoutesError {
-    RoutExists,
+    RouteExists,
+    ParamMismatch(String, String),
 }
 
 fn split_head(org: &str) -> (&str, &str) {
@@ -23,33 +73,40 @@ impl<T: Copy> Route<T> {
         let path = uniform_path(path);
         if let Some((curr, rest)) = path.split_once('/') {
             Self {
-                key: curr.to_string(),
+                key: curr.into(),
                 item: None,
                 childs: vec![Route::new(rest, item)],
             }
         } else {
             Self {
-                key: path.to_string(),
+                key: path.into(),
                 item: Some(item),
                 childs: vec![],
             }
         }
     }
 
-    fn find(&self, path: &str) -> Option<&Route<T>> {
+    fn find(&self, path: &str) -> Option<(&Route<T>, HashMap<String, String>)> {
         let path = uniform_path(path);
         if let Some((curr, rest)) = path.split_once('/') {
-            if self.key == curr {
+            if self.key.search_eq(curr) {
                 for child in &self.childs {
                     let found = child.find(rest);
-                    if let Some(_) = found {
-                        return found;
+                    if let Some((found, mut params)) = found {
+                        if let RouteTyp::Param(param) = &self.key {
+                            params.insert(param[1..].to_string(), curr.to_string());
+                        }
+                        return Some((found, params));
                     }
                 }
             }
         } else {
-            if self.key == path {
-                return Some(self);
+            if self.key.search_eq(path) {
+                let mut params = HashMap::new();
+                if let RouteTyp::Param(param) = &self.key {
+                    params.insert(param[1..].to_string(), path.to_string());
+                }
+                return Some((self, params));
             }
         }
         None
@@ -58,7 +115,7 @@ impl<T: Copy> Route<T> {
     fn add(self, path: &str, item: T) -> Result<Route<T>, RoutesError> {
         if path == "" {
             if let Some(_) = self.item {
-                return Err(RoutesError::RoutExists);
+                return Err(RoutesError::RouteExists);
             } else {
                 return Ok(Route {
                     key: self.key,
@@ -71,7 +128,7 @@ impl<T: Copy> Route<T> {
         let mut new_childs = vec![];
         let mut added = false;
         for child in self.childs {
-            if child.key == curr {
+            if child.key.add_eq(curr)? {
                 new_childs.push(child.add(rest, item)?);
                 added = true;
             } else {
@@ -98,7 +155,7 @@ impl<T: Copy> Routes<T> {
     pub fn new() -> Self {
         Self {
             root: Route {
-                key: "$root".to_string(),
+                key: "$root".into(),
                 item: None,
                 childs: vec![],
             },
@@ -112,11 +169,13 @@ impl<T: Copy> Routes<T> {
         })
     }
 
-    pub fn find(&self, path: &str) -> Option<T> {
+    pub fn find(&self, path: &str) -> Option<(T, HashMap<String, String>)> {
         let path = uniform_path(path);
         let route = self.root.find(format!("$root/{}", path).as_str());
-        if let Some(item) = route {
-            return item.item;
+        if let Some(found) = route {
+            if let Some(item) = found.0.item {
+                return Some((item, found.1));
+            }
         }
         None
     }
@@ -158,7 +217,7 @@ mod tests {
         assert_eq!(
             route,
             Route {
-                key: "A".to_string(),
+                key: RouteTyp::Fixed("A".to_string()),
                 item: Some(0),
                 childs: vec![]
             }
@@ -171,12 +230,33 @@ mod tests {
         assert_eq!(
             route,
             Route {
-                key: "A".to_string(),
+                key: RouteTyp::Fixed("A".to_string()),
                 item: None,
                 childs: vec![Route {
-                    key: "B".to_string(),
+                    key: RouteTyp::Fixed("B".to_string()),
                     item: Some(0),
                     childs: vec![]
+                }]
+            }
+        );
+    }
+
+    #[test]
+    fn with_params() {
+        let route = Route::new("/A/:B/C", 0);
+        assert_eq!(
+            route,
+            Route {
+                key: RouteTyp::Fixed("A".to_string()),
+                item: None,
+                childs: vec![Route {
+                    key: RouteTyp::Param(":B".to_string()),
+                    item: None,
+                    childs: vec![Route {
+                        key: RouteTyp::Fixed("C".to_string()),
+                        item: Some(0),
+                        childs: vec![]
+                    }]
                 }]
             }
         );
@@ -188,23 +268,29 @@ mod tests {
         assert_eq!(route.find("/C"), None);
         assert_eq!(
             route.find("/A").unwrap(),
-            &Route {
-                key: "A".to_string(),
-                item: None,
-                childs: vec![Route {
-                    key: "B".to_string(),
-                    item: Some(0),
-                    childs: vec![]
-                }]
-            }
+            (
+                &Route {
+                    key: RouteTyp::Fixed("A".to_string()),
+                    item: None,
+                    childs: vec![Route {
+                        key: RouteTyp::Fixed("B".to_string()),
+                        item: Some(0),
+                        childs: vec![]
+                    }]
+                },
+                HashMap::new()
+            )
         );
         assert_eq!(
             route.find("/A/B").unwrap(),
-            &Route {
-                key: "B".to_string(),
-                item: Some(0),
-                childs: vec![]
-            }
+            (
+                &Route {
+                    key: RouteTyp::Fixed("B".to_string()),
+                    item: Some(0),
+                    childs: vec![]
+                },
+                HashMap::new()
+            )
         );
         assert_eq!(route.find("/A/C"), None);
     }
@@ -217,10 +303,10 @@ mod tests {
             routes,
             Routes {
                 root: Route {
-                    key: "$root".to_string(),
+                    key: RouteTyp::Fixed("$root".to_string()),
                     item: None,
                     childs: vec![Route {
-                        key: "A".to_string(),
+                        key: RouteTyp::Fixed("A".to_string()),
                         item: Some(0),
                         childs: vec![]
                     }]
@@ -237,13 +323,13 @@ mod tests {
             routes,
             Routes {
                 root: Route {
-                    key: "$root".to_string(),
+                    key: RouteTyp::Fixed("$root".to_string()),
                     item: None,
                     childs: vec![Route {
-                        key: "A".to_string(),
+                        key: RouteTyp::Fixed("A".to_string()),
                         item: None,
                         childs: vec![Route {
-                            key: "B".to_string(),
+                            key: RouteTyp::Fixed("B".to_string()),
                             item: Some(0),
                             childs: vec![]
                         }]
@@ -262,16 +348,16 @@ mod tests {
             routes,
             Routes {
                 root: Route {
-                    key: "$root".to_string(),
+                    key: RouteTyp::Fixed("$root".to_string()),
                     item: None,
                     childs: vec![
                         Route {
-                            key: "A".to_string(),
+                            key: RouteTyp::Fixed("A".to_string()),
                             item: Some(0),
                             childs: vec![]
                         },
                         Route {
-                            key: "B".to_string(),
+                            key: RouteTyp::Fixed("B".to_string()),
                             item: Some(1),
                             childs: vec![]
                         }
@@ -286,7 +372,7 @@ mod tests {
         let routes = Routes::new();
         let routes = routes.add("/A", 0).unwrap();
         let error = routes.add("/A", 1).unwrap_err();
-        assert_eq!(error, RoutesError::RoutExists)
+        assert_eq!(error, RoutesError::RouteExists)
     }
 
     #[test]
@@ -298,19 +384,19 @@ mod tests {
             routes,
             Routes {
                 root: Route {
-                    key: "$root".to_string(),
+                    key: RouteTyp::Fixed("$root".to_string()),
                     item: None,
                     childs: vec![Route {
-                        key: "A".to_string(),
+                        key: RouteTyp::Fixed("A".to_string()),
                         item: None,
                         childs: vec![
                             Route {
-                                key: "B".to_string(),
+                                key: RouteTyp::Fixed("B".to_string()),
                                 item: Some(0),
                                 childs: vec![]
                             },
                             Route {
-                                key: "C".to_string(),
+                                key: RouteTyp::Fixed("C".to_string()),
                                 item: Some(1),
                                 childs: vec![]
                             }
@@ -326,7 +412,7 @@ mod tests {
         let routes = Routes::new();
         let routes = routes.add("/A/B", 0).unwrap();
         let error = routes.add("/A/B", 1).unwrap_err();
-        assert_eq!(error, RoutesError::RoutExists)
+        assert_eq!(error, RoutesError::RouteExists)
     }
 
     #[test]
@@ -338,16 +424,16 @@ mod tests {
             routes,
             Routes {
                 root: Route {
-                    key: "$root".to_string(),
+                    key: RouteTyp::Fixed("$root".to_string()),
                     item: None,
                     childs: vec![Route {
-                        key: "A".to_string(),
+                        key: RouteTyp::Fixed("A".to_string()),
                         item: None,
                         childs: vec![Route {
-                            key: "B".to_string(),
+                            key: RouteTyp::Fixed("B".to_string()),
                             item: Some(0),
                             childs: vec![Route {
-                                key: "C".to_string(),
+                                key: RouteTyp::Fixed("C".to_string()),
                                 item: Some(1),
                                 childs: vec![]
                             }]
@@ -367,13 +453,13 @@ mod tests {
             routes,
             Routes {
                 root: Route {
-                    key: "$root".to_string(),
+                    key: RouteTyp::Fixed("$root".to_string()),
                     item: None,
                     childs: vec![Route {
-                        key: "A".to_string(),
+                        key: RouteTyp::Fixed("A".to_string()),
                         item: Some(1),
                         childs: vec![Route {
-                            key: "B".to_string(),
+                            key: RouteTyp::Fixed("B".to_string()),
                             item: Some(0),
                             childs: vec![]
                         }]
@@ -392,16 +478,16 @@ mod tests {
             routes,
             Routes {
                 root: Route {
-                    key: "$root".to_string(),
+                    key: RouteTyp::Fixed("$root".to_string()),
                     item: None,
                     childs: vec![Route {
-                        key: "A".to_string(),
+                        key: RouteTyp::Fixed("A".to_string()),
                         item: None,
                         childs: vec![Route {
-                            key: "B".to_string(),
+                            key: RouteTyp::Fixed("B".to_string()),
                             item: Some(1),
                             childs: vec![Route {
-                                key: "C".to_string(),
+                                key: RouteTyp::Fixed("C".to_string()),
                                 item: Some(0),
                                 childs: vec![]
                             }]
@@ -421,13 +507,13 @@ mod tests {
             routes,
             Routes {
                 root: Route {
-                    key: "$root".to_string().to_string(),
+                    key: RouteTyp::Fixed("$root".to_string()),
                     item: Some(1),
                     childs: vec![Route {
-                        key: "A".to_string(),
+                        key: RouteTyp::Fixed("A".to_string()),
                         item: None,
                         childs: vec![Route {
-                            key: "B".to_string(),
+                            key: RouteTyp::Fixed("B".to_string()),
                             item: Some(0),
                             childs: vec![]
                         }]
@@ -438,13 +524,112 @@ mod tests {
     }
 
     #[test]
+    fn add_same_param() {
+        let routes = Routes::new();
+        let routes = routes.add("/:A/B", 0).unwrap();
+        let routes = routes.add("/:A/C", 1).unwrap();
+        assert_eq!(
+            routes,
+            Routes {
+                root: Route {
+                    key: RouteTyp::Fixed("$root".to_string()),
+                    item: None,
+                    childs: vec![Route {
+                        key: RouteTyp::Param(":A".to_string()),
+                        item: None,
+                        childs: vec![
+                            Route {
+                                key: RouteTyp::Fixed("B".to_string()),
+                                item: Some(0),
+                                childs: vec![]
+                            },
+                            Route {
+                                key: RouteTyp::Fixed("C".to_string()),
+                                item: Some(1),
+                                childs: vec![]
+                            }
+                        ]
+                    },]
+                }
+            }
+        )
+    }
+
+    #[test]
+    fn add_wrong_param() {
+        let routes = Routes::new();
+        let routes = routes.add("/:A/B", 0).unwrap();
+        let error = routes.add("/:X/C", 1).unwrap_err();
+        assert_eq!(
+            error,
+            RoutesError::ParamMismatch(":A".to_string(), ":X".to_string())
+        )
+    }
+
+    #[test]
+    fn add_no_param() {
+        let routes = Routes::new();
+        let routes = routes.add("/:A/B", 0).unwrap();
+        let error = routes.add("/X/C", 1).unwrap_err();
+        assert_eq!(
+            error,
+            RoutesError::ParamMismatch(":A".to_string(), "X".to_string())
+        )
+    }
+
+    #[test]
+    fn add_param() {
+        let routes = Routes::new();
+        let routes = routes.add("/A/B", 0).unwrap();
+        let routes = routes.add("/:A/C", 1).unwrap();
+        assert_eq!(
+            routes,
+            Routes {
+                root: Route {
+                    key: RouteTyp::Fixed("$root".to_string()),
+                    item: None,
+                    childs: vec![
+                        Route {
+                            key: RouteTyp::Fixed("A".to_string()),
+                            item: None,
+                            childs: vec![Route {
+                                key: RouteTyp::Fixed("B".to_string()),
+                                item: Some(0),
+                                childs: vec![]
+                            },]
+                        },
+                        Route {
+                            key: RouteTyp::Param(":A".to_string()),
+                            item: None,
+                            childs: vec![Route {
+                                key: RouteTyp::Fixed("C".to_string()),
+                                item: Some(1),
+                                childs: vec![]
+                            }]
+                        }
+                    ]
+                }
+            }
+        )
+    }
+
+    #[test]
     fn find_routes() {
         let routes = Routes::new();
         let routes = routes.add("/A/B", 0).unwrap();
         let routes = routes.add("/A", 1).unwrap();
-        assert_eq!(routes.find("/A"), Some(1));
-        assert_eq!(routes.find("/A/B"), Some(0));
+        assert_eq!(routes.find("/A"), Some((1, HashMap::new())));
+        assert_eq!(routes.find("/A/B"), Some((0, HashMap::new())));
         assert_eq!(routes.find("/C"), None);
         assert_eq!(routes.find("/A/C"), None);
+    }
+
+    #[test]
+    fn find_params() {
+        let routes = Routes::new();
+        let routes = routes.add("/:A/B", 0).unwrap();
+        let mut params = HashMap::new();
+        params.insert("A".to_string(), "X".to_string());
+        assert_eq!(routes.find("/X/B"), Some((0, params)))
     }
 }

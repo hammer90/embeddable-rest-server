@@ -115,7 +115,7 @@ impl Response {
 }
 
 pub struct Request {
-    pub params: Option<HashMap<String, String>>,
+    pub params: HashMap<String, String>,
     pub query: Option<String>,
     pub headers: HashMap<String, String>,
     pub data: Option<Vec<u8>>,
@@ -199,7 +199,7 @@ impl HttpRoutes {
         }
     }
 
-    fn find(&self, verb: &HttpVerbs, route: &str) -> Option<RouteFn> {
+    fn find(&self, verb: &HttpVerbs, route: &str) -> Option<(RouteFn, HashMap<String, String>)> {
         self.find_verb(verb).find(route)
     }
 }
@@ -348,8 +348,8 @@ impl RestServer {
             data = Some(self.parse_body(&mut reader, &headers)?)
         }
 
-        let resp = route(Request {
-            params: None,
+        let resp = route.0(Request {
+            params: route.1,
             query: parsed.query,
             headers,
             data,
