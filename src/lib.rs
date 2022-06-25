@@ -7,6 +7,7 @@ mod status_text;
 mod mock_stream;
 
 use std::collections::HashMap;
+use std::error::Error as StdError;
 use std::io::{prelude::*, BufReader, Error as IoError};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::{Arc, Mutex};
@@ -35,11 +36,18 @@ pub enum HttpError {
     RouteExists,
     IO(IoError),
     Responseable(ResponseableError),
+    Std,
 }
 
 impl From<IoError> for ResponseableError {
     fn from(_: IoError) -> ResponseableError {
         ResponseableError::IO
+    }
+}
+
+impl From<Box<dyn StdError>> for HttpError {
+    fn from(_: Box<dyn StdError>) -> HttpError {
+        HttpError::Std
     }
 }
 
@@ -484,18 +492,24 @@ pub struct SpawnedRestServer {
 }
 
 impl SpawnedRestServer {
-    pub fn spawn(server: RestServer) -> Self {
+    pub fn spawn(server: RestServer, stack_size: usize) -> Result<Self, HttpError> {
         let stop = server.shutdown.clone();
-        let handle = thread::spawn(move || server.start());
-        SpawnedRestServer {
+        let builder = thread::Builder::new().stack_size(stack_size);
+        let handle = builder.spawn(move || server.start())?;
+        Ok(SpawnedRestServer {
             _handle: handle,
             stop,
-        }
+        })
     }
 
     pub fn stop(&self) {
         let mut shutdown_lock = self.stop.lock().unwrap();
         *shutdown_lock = true;
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        let shutdown_lock = self.stop.lock().unwrap();
+        *shutdown_lock
     }
 }
 
