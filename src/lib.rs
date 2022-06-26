@@ -317,7 +317,7 @@ impl RestServer {
 
     fn parse_body(
         &self,
-        reader: &mut BufReader<TcpStream>,
+        reader: &mut BufReader<&TcpStream>,
         headers: &HashMap<String, String>,
     ) -> Result<Vec<u8>, HttpError> {
         let len = self.extract_length(headers)?;
@@ -330,7 +330,7 @@ impl RestServer {
     }
 
     fn handle_connection(&self, stream: &TcpStream) -> Result<(), HttpError> {
-        let mut reader = BufReader::with_capacity(self.buf_size, stream.try_clone()?);
+        let mut reader = BufReader::with_capacity(self.buf_size, stream);
         let mut start = String::new();
         let len = reader.read_line(&mut start)?;
         if len == 0 {
