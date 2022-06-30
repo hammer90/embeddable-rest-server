@@ -26,8 +26,9 @@ pub enum ResponseableError {
     NotFound(String),
     BadHeader(String),
     MethodNotImplemented(String),
-    LengthRequired,
+    InvalidLength,
     PayloadToLarge,
+    BrokenChunk,
     IO,
 }
 
@@ -126,10 +127,48 @@ pub struct Request {
     pub params: HashMap<String, String>,
     pub query: Option<String>,
     pub headers: HashMap<String, String>,
-    pub data: Option<Vec<u8>>,
 }
 
-pub type RouteFn = fn(req: Request) -> Response;
+pub enum HandlerResult {
+    Abort(Response),
+    Continue,
+}
+
+pub trait RequestHandler {
+    fn chunk(&mut self, chunk: Vec<u8>) -> HandlerResult;
+    fn end(&mut self) -> Response;
+}
+
+pub type SimpleRoute = fn(req: &Request, data: &Vec<u8>) -> Response;
+
+pub struct SimpleHandler {
+    route: SimpleRoute,
+    req: Request,
+    data: Vec<u8>,
+}
+
+impl SimpleHandler {
+    pub fn new(req: Request, route: SimpleRoute) -> Box<Self> {
+        Box::new(Self {
+            route,
+            req,
+            data: vec![],
+        })
+    }
+}
+
+impl RequestHandler for SimpleHandler {
+    fn chunk(&mut self, mut chunk: Vec<u8>) -> HandlerResult {
+        self.data.append(&mut chunk);
+        HandlerResult::Continue
+    }
+
+    fn end(&mut self) -> Response {
+        (self.route)(&self.req, &self.data)
+    }
+}
+
+pub type RouteFn = fn(req: Request) -> Box<dyn RequestHandler>;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum HttpVerbs {
@@ -210,6 +249,12 @@ impl HttpRoutes {
     fn find(&self, verb: &HttpVerbs, route: &str) -> Option<(RouteFn, HashMap<String, String>)> {
         self.find_verb(verb).find(route)
     }
+}
+
+enum ContentLength {
+    Fixed(usize),
+    Chunked,
+    None,
 }
 
 pub struct RestServer {
@@ -293,8 +338,9 @@ impl RestServer {
                 }
                 ResponseableError::NotFound(path) => self.send_not_found(stream, path),
                 ResponseableError::BadHeader(_) => self.send_bad_headers(stream),
-                ResponseableError::LengthRequired => self.send_length_required(stream),
+                ResponseableError::InvalidLength => self.send_invalid_length(stream),
                 ResponseableError::PayloadToLarge => self.send_payload_to_large(stream),
+                ResponseableError::BrokenChunk => self.send_broken_chunk(stream),
                 ResponseableError::IO => self.send_io_error(stream),
             },
             result => result,
@@ -304,29 +350,21 @@ impl RestServer {
     fn extract_length(
         &self,
         headers: &HashMap<String, String>,
-    ) -> Result<usize, ResponseableError> {
+    ) -> Result<ContentLength, ResponseableError> {
         if !headers.contains_key("content-length") {
-            return Err(ResponseableError::LengthRequired);
+            if headers.contains_key("transfer-encoding")
+                && headers["transfer-encoding"] == "chunked"
+            {
+                return Ok(ContentLength::Chunked);
+            } else {
+                return Ok(ContentLength::None);
+            }
         }
-        let len = headers["content-length"].as_str().parse::<usize>();
-        match len {
-            Err(_) => Err(ResponseableError::LengthRequired),
-            Ok(len) => Ok(len),
-        }
-    }
-
-    fn parse_body(
-        &self,
-        reader: &mut BufReader<&TcpStream>,
-        headers: &HashMap<String, String>,
-    ) -> Result<Vec<u8>, HttpError> {
-        let len = self.extract_length(headers)?;
-        if len > self.buf_size {
-            return Err(ResponseableError::PayloadToLarge.into());
-        }
-        let mut buf = vec![0_u8; len];
-        reader.read_exact(&mut buf)?;
-        Ok(buf)
+        headers["content-length"]
+            .as_str()
+            .parse::<usize>()
+            .map(ContentLength::Fixed)
+            .map_err(|_| ResponseableError::InvalidLength)
     }
 
     fn handle_connection(&self, stream: &TcpStream) -> Result<(), HttpError> {
@@ -347,27 +385,89 @@ impl RestServer {
             .ok_or(ResponseableError::NotFound(parsed.path))?;
 
         let headers = parse_headers(&mut reader)?;
+        let len = self.extract_length(&headers)?;
 
-        let mut data = None;
-        if parsed.method == HttpVerbs::PATCH
-            || parsed.method == HttpVerbs::POST
-            || parsed.method == HttpVerbs::PUT
-        {
-            data = Some(self.parse_body(&mut reader, &headers)?)
-        }
-
-        let resp = route.0(Request {
+        let mut handler = route.0(Request {
             params: route.1,
             query: parsed.query,
             headers,
-            data,
         });
+
+        let resp = if parsed.method == HttpVerbs::PATCH
+            || parsed.method == HttpVerbs::POST
+            || parsed.method == HttpVerbs::PUT
+        {
+            match len {
+                ContentLength::Fixed(len) => self.handle_fixed_request(len, handler, reader)?,
+                ContentLength::Chunked => self.handle_chunked_request(handler, &mut reader)?,
+                ContentLength::None => {
+                    Response::fixed_string(411, "Include length or send chunked")
+                }
+            }
+        } else {
+            handler.end()
+        };
 
         match resp.body {
             BodyType::Fixed(body) => self.fixed_response(stream, resp.status, &body),
             BodyType::StreamWithTrailers(body) => self.stream_response(stream, resp.status, body),
             BodyType::Stream(body) => {
                 self.stream_response(stream, resp.status, Box::new(NoTrailers::new(body)))
+            }
+        }
+    }
+
+    fn handle_fixed_request(
+        &self,
+        len: usize,
+        mut handler: Box<dyn RequestHandler>,
+        mut reader: BufReader<&TcpStream>,
+    ) -> Result<Response, HttpError> {
+        if len > self.buf_size {
+            return Err(ResponseableError::PayloadToLarge.into());
+        }
+        let mut buf = vec![0_u8; len];
+        reader.read_exact(&mut buf)?;
+        match handler.chunk(buf) {
+            HandlerResult::Abort(res) => Ok(res),
+            HandlerResult::Continue => Ok(handler.end()),
+        }
+    }
+
+    fn read_chunk_length(
+        &self,
+        reader: &mut BufReader<&TcpStream>,
+    ) -> Result<usize, ResponseableError> {
+        let mut len = String::new();
+        let count = reader.read_line(&mut len)?;
+        if count == 0 || len == "\r\n" {
+            return Err(ResponseableError::BrokenChunk);
+        }
+        usize::from_str_radix(&len[..count - 2], 16).map_err(|e| {
+            println!("{}", e);
+            ResponseableError::BrokenChunk
+        })
+    }
+
+    fn handle_chunked_request(
+        &self,
+        mut handler: Box<dyn RequestHandler>,
+        reader: &mut BufReader<&TcpStream>,
+    ) -> Result<Response, HttpError> {
+        loop {
+            let len = self.read_chunk_length(reader)?;
+            if len == 0 {
+                return Ok(handler.end());
+            }
+            let mut buf = vec![0_u8; len];
+            reader.read_exact(&mut buf)?;
+            if let HandlerResult::Abort(res) = handler.chunk(buf) {
+                return Ok(res);
+            }
+            let mut nl = [0_u8, 2];
+            reader.read_exact(&mut nl)?;
+            if nl != [13, 10] {
+                return Err(ResponseableError::BrokenChunk.into());
             }
         }
     }
@@ -408,8 +508,8 @@ impl RestServer {
         self.fixed_response(&stream, 400, "Invalid header data\r\n".as_bytes())
     }
 
-    fn send_length_required(&self, stream: TcpStream) -> Result<(), HttpError> {
-        self.fixed_response(&stream, 411, "Include length\r\n".as_bytes())
+    fn send_invalid_length(&self, stream: TcpStream) -> Result<(), HttpError> {
+        self.fixed_response(&stream, 411, "Length invalid\r\n".as_bytes())
     }
 
     fn send_payload_to_large(&self, stream: TcpStream) -> Result<(), HttpError> {
@@ -422,6 +522,10 @@ impl RestServer {
             404,
             format!("Route {} does not exists\r\n", path).as_bytes(),
         )
+    }
+
+    fn send_broken_chunk(&self, stream: TcpStream) -> Result<(), HttpError> {
+        self.fixed_response(&stream, 400, "Invalid chunk encoding\r\n".as_bytes())
     }
 
     fn stream_response(

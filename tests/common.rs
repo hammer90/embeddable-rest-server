@@ -28,6 +28,11 @@ pub fn post(port: u16, route: &str, data: &str) -> Response<isahc::Body> {
     isahc::post(format!("http://localhost:{}{}", port, route).as_str(), data).unwrap()
 }
 
+pub fn put_chunked(port: u16, route: &str, data: &'static str) -> Response<isahc::Body> {
+    let body = Body::from_reader(data.as_bytes());
+    isahc::put(format!("http://localhost:{}{}", port, route).as_str(), body).unwrap()
+}
+
 pub fn get_header(
     port: u16,
     route: &str,
