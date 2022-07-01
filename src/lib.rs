@@ -168,6 +168,30 @@ impl RequestHandler for SimpleHandler {
     }
 }
 
+pub struct FixedHandler {
+    status: u32,
+    body: String,
+}
+
+impl FixedHandler {
+    pub fn new(status: u32, body: &str) -> Box<Self> {
+        Box::new(Self {
+            status,
+            body: body.to_string(),
+        })
+    }
+}
+
+impl RequestHandler for FixedHandler {
+    fn chunk(&mut self, _chunk: Vec<u8>) -> HandlerResult {
+        HandlerResult::Abort(Response::fixed_string(self.status, self.body.as_str()))
+    }
+
+    fn end(&mut self) -> Response {
+        Response::fixed_string(self.status, self.body.as_str())
+    }
+}
+
 pub type RouteFn = fn(req: Request) -> Box<dyn RequestHandler>;
 
 #[derive(Debug, PartialEq, Eq)]

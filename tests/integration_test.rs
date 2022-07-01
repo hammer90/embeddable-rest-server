@@ -1,7 +1,8 @@
 mod common;
 use common::{get, get_header, post, start_server};
 use embeddable_rest_server::{
-    BodyType, HandlerResult, HttpVerbs, RequestHandler, Response, SimpleHandler, Streamable,
+    BodyType, FixedHandler, HandlerResult, HttpVerbs, RequestHandler, Response, SimpleHandler,
+    Streamable,
 };
 use isahc::{ReadResponseExt, ResponseExt};
 
@@ -34,14 +35,27 @@ fn fixed() {
 
 #[test]
 fn from_string() {
-    let (port, _server) = start_server(vec![(HttpVerbs::GET, "/simple".to_string(), |req| {
-        SimpleHandler::new(req, |_, _| Response::fixed_string(201, "simple\r\n"))
+    let (port, _server) = start_server(vec![(HttpVerbs::GET, "/string".to_string(), |req| {
+        SimpleHandler::new(req, |_, _| Response::fixed_string(202, "string\r\n"))
     })]);
 
-    let mut res = get(port, "/simple");
+    let mut res = get(port, "/string");
 
-    assert_eq!(res.status(), 201);
-    assert_eq!(res.text().unwrap(), "simple\r\n");
+    assert_eq!(res.status(), 202);
+    assert_eq!(res.text().unwrap(), "string\r\n");
+}
+
+#[test]
+fn fixed_handler() {
+    let (port, _server) =
+        start_server(vec![(HttpVerbs::GET, "/fixed-handler".to_string(), |_| {
+            FixedHandler::new(200, "fixed-handler\r\n")
+        })]);
+
+    let mut res = get(port, "/fixed-handler");
+
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.text().unwrap(), "fixed-handler\r\n");
 }
 
 #[test]
