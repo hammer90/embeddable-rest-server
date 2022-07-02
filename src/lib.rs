@@ -422,7 +422,9 @@ impl RestServer {
             || parsed.method == HttpVerbs::PUT
         {
             match len {
-                ContentLength::Fixed(len) => self.handle_fixed_request(len, handler, reader)?,
+                ContentLength::Fixed(len) => {
+                    self.handle_fixed_request(len, handler, &mut reader)?
+                }
                 ContentLength::Chunked => self.handle_chunked_request(handler, &mut reader)?,
                 ContentLength::None => {
                     Response::fixed_string(411, "Include length or send chunked")
@@ -441,21 +443,35 @@ impl RestServer {
         }
     }
 
+    fn read_in_chunks(
+        &self,
+        len: usize,
+        handler: &mut Box<dyn RequestHandler>,
+        reader: &mut BufReader<&TcpStream>,
+    ) -> Result<HandlerResult, HttpError> {
+        let mut count = 0;
+        while count < len {
+            let buf_size = min(len - count, self.buf_size);
+            let mut buf = vec![0_u8; buf_size];
+            reader.read_exact(&mut buf)?;
+            if let HandlerResult::Abort(res) = handler.chunk(buf) {
+                return Ok(HandlerResult::Abort(res));
+            }
+            count += buf_size;
+        }
+        Ok(HandlerResult::Continue)
+    }
+
     fn handle_fixed_request(
         &self,
         len: usize,
         mut handler: Box<dyn RequestHandler>,
-        mut reader: BufReader<&TcpStream>,
+        reader: &mut BufReader<&TcpStream>,
     ) -> Result<Response, HttpError> {
-        if len > self.buf_size {
-            return Err(ResponseableError::PayloadToLarge.into());
+        if let HandlerResult::Abort(res) = self.read_in_chunks(len, &mut handler, reader)? {
+            return Ok(res);
         }
-        let mut buf = vec![0_u8; len];
-        reader.read_exact(&mut buf)?;
-        match handler.chunk(buf) {
-            HandlerResult::Abort(res) => Ok(res),
-            HandlerResult::Continue => Ok(handler.end()),
-        }
+        Ok(handler.end())
     }
 
     fn read_chunk_length(
@@ -483,9 +499,7 @@ impl RestServer {
             if len == 0 {
                 return Ok(handler.end());
             }
-            let mut buf = vec![0_u8; len];
-            reader.read_exact(&mut buf)?;
-            if let HandlerResult::Abort(res) = handler.chunk(buf) {
+            if let HandlerResult::Abort(res) = self.read_in_chunks(len, &mut handler, reader)? {
                 return Ok(res);
             }
             let mut nl = [0_u8, 2];
@@ -645,5 +659,13 @@ impl Drop for SpawnedRestServer {
     fn drop(&mut self) {
         self.stop();
         thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn min(a: usize, b: usize) -> usize {
+    if a < b {
+        a
+    } else {
+        b
     }
 }

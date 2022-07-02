@@ -1,17 +1,21 @@
 use embeddable_rest_server::{HttpError, HttpVerbs, RestServer, RouteFn, SpawnedRestServer};
 use isahc::{Body, Request, RequestExt, Response};
 
-pub fn start_server(routes: Vec<(HttpVerbs, String, RouteFn)>) -> (u16, SpawnedRestServer) {
+pub fn start_server(
+    routes: Vec<(HttpVerbs, String, RouteFn)>,
+    buf_len: usize,
+) -> (u16, SpawnedRestServer) {
     let port = portpicker::pick_unused_port().unwrap();
-    let server = setup_server(port, routes).unwrap();
+    let server = setup_server(port, routes, buf_len).unwrap();
     (port, SpawnedRestServer::spawn(server, 8192).unwrap())
 }
 
 fn setup_server(
     port: u16,
     routes: Vec<(HttpVerbs, String, RouteFn)>,
+    buf_len: usize,
 ) -> Result<RestServer, HttpError> {
-    let mut server = RestServer::new(format!("0.0.0.0:{}", port), 1024)?;
+    let mut server = RestServer::new(format!("0.0.0.0:{}", port), buf_len)?;
 
     for (verb, route, func) in routes {
         server = server.register(verb, route.as_str(), func)?;
