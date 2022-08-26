@@ -1,0 +1,19 @@
+[package]
+name = "embeddable_rest_server"
+authors = ["hammer90"]
+version = "0.1.0"
+edition = "2021"
+categories = ["network-programming"]
+keywords = ["api", "web", "http"]
+description = "simple response streaming http server"
+repository = "https://github.com/hammer90/embeddable-rest-server"
+license = "MIT"
+readme = "README.md"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+
+[dev-dependencies]
+portpicker = "0.1.1"
+isahc = "1.7.1"
