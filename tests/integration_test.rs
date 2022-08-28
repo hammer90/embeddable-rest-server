@@ -1,4 +1,6 @@
 mod common;
+use std::sync::Arc;
+
 use common::{get, get_header, post, start_server};
 use embeddable_rest_server::{
     BodyType, FixedHandler, HandlerResult, HttpVerbs, RequestHandler, Response, SimpleHandler,
@@ -10,7 +12,7 @@ use crate::common::put_chunked;
 
 #[test]
 fn not_found() {
-    let (port, _server) = start_server(vec![], 1024);
+    let (port, _server) = start_server(vec![], 1024, 42);
 
     let mut res = get(port, "/no_route");
 
@@ -21,13 +23,14 @@ fn not_found() {
 #[test]
 fn fixed() {
     let (port, _server) = start_server(
-        vec![(HttpVerbs::GET, "/ok".to_string(), |req| {
-            SimpleHandler::new(req, |_, _| Response {
+        vec![(HttpVerbs::GET, "/ok".to_string(), |req, context| {
+            SimpleHandler::new(req, context, |_, _, _| Response {
                 status: 200,
                 body: BodyType::Fixed("fixed\r\n".as_bytes().to_vec()),
             })
         })],
         1024,
+        42,
     );
 
     let mut res = get(port, "/ok");
@@ -39,10 +42,13 @@ fn fixed() {
 #[test]
 fn from_string() {
     let (port, _server) = start_server(
-        vec![(HttpVerbs::GET, "/string".to_string(), |req| {
-            SimpleHandler::new(req, |_, _| Response::fixed_string(202, "string\r\n"))
+        vec![(HttpVerbs::GET, "/string".to_string(), |req, context| {
+            SimpleHandler::new(req, context, |_, _, _| {
+                Response::fixed_string(202, "string\r\n")
+            })
         })],
         1024,
+        42,
     );
 
     let mut res = get(port, "/string");
@@ -54,10 +60,11 @@ fn from_string() {
 #[test]
 fn fixed_handler() {
     let (port, _server) = start_server(
-        vec![(HttpVerbs::GET, "/fixed-handler".to_string(), |_| {
+        vec![(HttpVerbs::GET, "/fixed-handler".to_string(), |_, _| {
             FixedHandler::new(200, "fixed-handler\r\n")
         })],
         1024,
+        42,
     );
 
     let mut res = get(port, "/fixed-handler");
@@ -69,8 +76,8 @@ fn fixed_handler() {
 #[test]
 fn chunked() {
     let (port, _server) = start_server(
-        vec![(HttpVerbs::GET, "/chunked".to_string(), |req| {
-            SimpleHandler::new(req, |_, _| Response {
+        vec![(HttpVerbs::GET, "/chunked".to_string(), |req, context| {
+            SimpleHandler::new(req, context, |_, _, _| Response {
                 status: 200,
                 body: BodyType::Stream(Box::new(
                     [
@@ -82,6 +89,7 @@ fn chunked() {
             })
         })],
         1024,
+        42,
     );
 
     let mut res = get(port, "/chunked");
@@ -94,13 +102,14 @@ fn chunked() {
 #[test]
 fn query() {
     let (port, _server) = start_server(
-        vec![(HttpVerbs::GET, "/query".to_string(), |req| {
-            SimpleHandler::new(req, |req, _| {
+        vec![(HttpVerbs::GET, "/query".to_string(), |req, context| {
+            SimpleHandler::new(req, context, |req, _, _| {
                 assert_eq!(req.query.as_ref().unwrap(), "count&foo=bar");
                 Response::fixed_string(200, "queried\r\n")
             })
         })],
         1024,
+        42,
     );
 
     let mut res = get(port, "/query?count&foo=bar");
@@ -145,13 +154,14 @@ impl Streamable for WithTrailers {
 #[test]
 fn trailers() {
     let (port, _server) = start_server(
-        vec![(HttpVerbs::GET, "/trailered".to_string(), |req| {
-            SimpleHandler::new(req, |_, _| Response {
+        vec![(HttpVerbs::GET, "/trailered".to_string(), |req, context| {
+            SimpleHandler::new(req, context, |_, _, _| Response {
                 status: 200,
                 body: BodyType::StreamWithTrailers(Box::new(WithTrailers::new())),
             })
         })],
         1024,
+        42,
     );
 
     let mut res = get(port, "/trailered");
@@ -166,13 +176,14 @@ fn trailers() {
 #[test]
 fn headers() {
     let (port, _server) = start_server(
-        vec![(HttpVerbs::GET, "/headers".to_string(), |req| {
-            SimpleHandler::new(req, |req, _| {
+        vec![(HttpVerbs::GET, "/headers".to_string(), |req, context| {
+            SimpleHandler::new(req, context, |req, _, _| {
                 assert_eq!(req.headers["foo"], "bar");
                 Response::fixed_string(200, "heading\r\n")
             })
         })],
         1024,
+        42,
     );
 
     let mut res = get_header(port, "/headers", "foo", "bar");
@@ -184,13 +195,14 @@ fn headers() {
 #[test]
 fn body() {
     let (port, _server) = start_server(
-        vec![(HttpVerbs::POST, "/body".to_string(), |req| {
-            SimpleHandler::new(req, |_, data| {
+        vec![(HttpVerbs::POST, "/body".to_string(), |req, context| {
+            SimpleHandler::new(req, context, |_, _, data| {
                 assert_eq!(std::str::from_utf8(data.as_ref()).unwrap(), "Hello Data");
                 Response::fixed_string(200, "posted\r\n")
             })
         })],
         1024,
+        42,
     );
 
     let mut res = post(port, "/body", "Hello Data");
@@ -202,16 +214,21 @@ fn body() {
 #[test]
 fn params() {
     let (port, _server) = start_server(
-        vec![(HttpVerbs::GET, "/param/:foo/size".to_string(), |req| {
-            SimpleHandler::new(req, |req, _| {
-                assert_eq!(req.params["foo"], "bar");
-                Response::fixed_string(
-                    200,
-                    format!("size: {}\r\n", req.params["foo"].len()).as_str(),
-                )
-            })
-        })],
+        vec![(
+            HttpVerbs::GET,
+            "/param/:foo/size".to_string(),
+            |req, context| {
+                SimpleHandler::new(req, context, |req, _, _| {
+                    assert_eq!(req.params["foo"], "bar");
+                    Response::fixed_string(
+                        200,
+                        format!("size: {}\r\n", req.params["foo"].len()).as_str(),
+                    )
+                })
+            },
+        )],
         1024,
+        42,
     );
 
     let mut res = get(port, "/param/bar/size");
@@ -236,10 +253,11 @@ impl RequestHandler for ChunkedRequestHandler {
 #[test]
 fn body_chunked() {
     let (port, _server) = start_server(
-        vec![(HttpVerbs::PUT, "/chunks".to_string(), |_| {
+        vec![(HttpVerbs::PUT, "/chunks".to_string(), |_, _| {
             Box::new(ChunkedRequestHandler {})
         })],
         1024,
+        42,
     );
 
     let mut res = put_chunked(port, "/chunks", "Hello Data");
@@ -251,13 +269,14 @@ fn body_chunked() {
 #[test]
 fn body_chunked_collected() {
     let (port, _server) = start_server(
-        vec![(HttpVerbs::PUT, "/collect".to_string(), |req| {
-            SimpleHandler::new(req, |_, data| {
+        vec![(HttpVerbs::PUT, "/collect".to_string(), |req, context| {
+            SimpleHandler::new(req, context, |_, _, data| {
                 assert_eq!(std::str::from_utf8(data.as_ref()).unwrap(), "Hello Data");
                 Response::fixed_string(200, "collected\r\n")
             })
         })],
         1024,
+        42,
     );
 
     let mut res = put_chunked(port, "/collect", "Hello Data");
@@ -285,10 +304,11 @@ impl RequestHandler for SmallChunkRequestHandler {
 #[test]
 fn small() {
     let (port, _server) = start_server(
-        vec![(HttpVerbs::POST, "/small".to_string(), |_| {
+        vec![(HttpVerbs::POST, "/small".to_string(), |_, _| {
             Box::new(SmallChunkRequestHandler { count: 0 })
         })],
         10,
+        42,
     );
 
     let mut res = post(port, "/small", "012345678901234567890123456789");
@@ -300,14 +320,45 @@ fn small() {
 #[test]
 fn small_chunked() {
     let (port, _server) = start_server(
-        vec![(HttpVerbs::PUT, "/small-chunks".to_string(), |_| {
+        vec![(HttpVerbs::PUT, "/small-chunks".to_string(), |_, _| {
             Box::new(SmallChunkRequestHandler { count: 0 })
         })],
         10,
+        42,
     );
 
     let mut res = put_chunked(port, "/small-chunks", "012345678901234567890123456789");
 
     assert_eq!(res.text().unwrap(), "3\r\n");
     assert_eq!(res.status(), 200);
+}
+
+struct Context {
+    path: String,
+}
+
+#[test]
+fn with_context() {
+    let context = Context {
+        path: "foo".to_string(),
+    };
+
+    let (port, _server) = start_server(
+        vec![(
+            HttpVerbs::GET,
+            "/context".to_string(),
+            |req, context: Arc<Context>| {
+                SimpleHandler::new(req, context, |_, context, _| {
+                    Response::fixed_string(200, &format!("path: '{}'\r\n", context.path))
+                })
+            },
+        )],
+        10,
+        context,
+    );
+
+    let mut res = get(port, "/context");
+
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.text().unwrap(), "path: 'foo'\r\n");
 }

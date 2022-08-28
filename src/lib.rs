@@ -139,32 +139,34 @@ pub trait RequestHandler {
     fn end(&mut self) -> Response;
 }
 
-pub type SimpleRoute = fn(req: &Request, data: &Vec<u8>) -> Response;
+pub type SimpleRoute<T> = fn(req: &Request, context: &T, data: &Vec<u8>) -> Response;
 
-pub struct SimpleHandler {
-    route: SimpleRoute,
+pub struct SimpleHandler<T> {
+    route: SimpleRoute<T>,
     req: Request,
     data: Vec<u8>,
+    context: T,
 }
 
-impl SimpleHandler {
-    pub fn new(req: Request, route: SimpleRoute) -> Box<Self> {
+impl<T> SimpleHandler<T> {
+    pub fn new(req: Request, context: T, route: SimpleRoute<T>) -> Box<Self> {
         Box::new(Self {
             route,
             req,
             data: vec![],
+            context,
         })
     }
 }
 
-impl RequestHandler for SimpleHandler {
+impl<T> RequestHandler for SimpleHandler<T> {
     fn chunk(&mut self, mut chunk: Vec<u8>) -> HandlerResult {
         self.data.append(&mut chunk);
         HandlerResult::Continue
     }
 
     fn end(&mut self) -> Response {
-        (self.route)(&self.req, &self.data)
+        (self.route)(&self.req, &self.context, &self.data)
     }
 }
 
@@ -192,7 +194,7 @@ impl RequestHandler for FixedHandler {
     }
 }
 
-pub type RouteFn = fn(req: Request) -> Box<dyn RequestHandler>;
+pub type RouteFn<T> = fn(req: Request, context: Arc<T>) -> Box<dyn RequestHandler>;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum HttpVerbs {
@@ -216,26 +218,26 @@ impl HttpVerbs {
     }
 }
 
-struct HttpRoutes {
-    get: Routes<RouteFn>,
-    post: Routes<RouteFn>,
-    put: Routes<RouteFn>,
-    patch: Routes<RouteFn>,
-    delete: Routes<RouteFn>,
+struct HttpRoutes<T> {
+    get: Routes<RouteFn<T>>,
+    post: Routes<RouteFn<T>>,
+    put: Routes<RouteFn<T>>,
+    patch: Routes<RouteFn<T>>,
+    delete: Routes<RouteFn<T>>,
 }
 
-impl HttpRoutes {
+impl<T> HttpRoutes<T> {
     fn new() -> Self {
         Self {
-            get: Routes::<RouteFn>::new(),
-            post: Routes::<RouteFn>::new(),
-            put: Routes::<RouteFn>::new(),
-            patch: Routes::<RouteFn>::new(),
-            delete: Routes::<RouteFn>::new(),
+            get: Routes::<RouteFn<T>>::new(),
+            post: Routes::<RouteFn<T>>::new(),
+            put: Routes::<RouteFn<T>>::new(),
+            patch: Routes::<RouteFn<T>>::new(),
+            delete: Routes::<RouteFn<T>>::new(),
         }
     }
 
-    fn add(self, verb: HttpVerbs, route: &str, func: RouteFn) -> Result<Self, RoutesError> {
+    fn add(self, verb: HttpVerbs, route: &str, func: RouteFn<T>) -> Result<Self, RoutesError> {
         match verb {
             HttpVerbs::GET => Ok(Self {
                 get: self.get.add(route, func)?,
@@ -260,7 +262,7 @@ impl HttpRoutes {
         }
     }
 
-    fn find_verb(&self, verb: &HttpVerbs) -> &Routes<RouteFn> {
+    fn find_verb(&self, verb: &HttpVerbs) -> &Routes<RouteFn<T>> {
         match verb {
             HttpVerbs::GET => &self.get,
             HttpVerbs::POST => &self.post,
@@ -270,7 +272,7 @@ impl HttpRoutes {
         }
     }
 
-    fn find(&self, verb: &HttpVerbs, route: &str) -> Option<(RouteFn, HashMap<String, String>)> {
+    fn find(&self, verb: &HttpVerbs, route: &str) -> Option<(RouteFn<T>, HashMap<String, String>)> {
         self.find_verb(verb).find(route)
     }
 }
@@ -281,15 +283,16 @@ enum ContentLength {
     None,
 }
 
-pub struct RestServer {
+pub struct RestServer<T> {
     listener: TcpListener,
-    routes: HttpRoutes,
+    routes: HttpRoutes<T>,
     shutdown: Arc<Mutex<bool>>,
     buf_size: usize,
+    context: Arc<T>,
 }
 
-impl RestServer {
-    pub fn new<A>(addr: A, buf_size: usize) -> Result<Self, HttpError>
+impl<T> RestServer<T> {
+    pub fn new<A>(addr: A, buf_size: usize, context: T) -> Result<Self, HttpError>
     where
         A: ToSocketAddrs,
     {
@@ -301,6 +304,7 @@ impl RestServer {
             routes: HttpRoutes::new(),
             shutdown,
             buf_size,
+            context: Arc::new(context),
         })
     }
 
@@ -322,30 +326,35 @@ impl RestServer {
         Ok(())
     }
 
-    pub fn register(self, verb: HttpVerbs, route: &str, func: RouteFn) -> Result<Self, HttpError> {
+    pub fn register(
+        self,
+        verb: HttpVerbs,
+        route: &str,
+        func: RouteFn<T>,
+    ) -> Result<Self, HttpError> {
         Ok(Self {
             routes: self.routes.add(verb, route, func)?,
             ..self
         })
     }
 
-    pub fn get(self, route: &str, func: RouteFn) -> Result<Self, HttpError> {
+    pub fn get(self, route: &str, func: RouteFn<T>) -> Result<Self, HttpError> {
         self.register(HttpVerbs::GET, route, func)
     }
 
-    pub fn post(self, route: &str, func: RouteFn) -> Result<Self, HttpError> {
+    pub fn post(self, route: &str, func: RouteFn<T>) -> Result<Self, HttpError> {
         self.register(HttpVerbs::POST, route, func)
     }
 
-    pub fn put(self, route: &str, func: RouteFn) -> Result<Self, HttpError> {
+    pub fn put(self, route: &str, func: RouteFn<T>) -> Result<Self, HttpError> {
         self.register(HttpVerbs::PUT, route, func)
     }
 
-    pub fn delete(self, route: &str, func: RouteFn) -> Result<Self, HttpError> {
+    pub fn delete(self, route: &str, func: RouteFn<T>) -> Result<Self, HttpError> {
         self.register(HttpVerbs::DELETE, route, func)
     }
 
-    pub fn patch(self, route: &str, func: RouteFn) -> Result<Self, HttpError> {
+    pub fn patch(self, route: &str, func: RouteFn<T>) -> Result<Self, HttpError> {
         self.register(HttpVerbs::PATCH, route, func)
     }
 
@@ -411,11 +420,14 @@ impl RestServer {
         let headers = parse_headers(&mut reader)?;
         let len = self.extract_length(&headers)?;
 
-        let mut handler = route.0(Request {
-            params: route.1,
-            query: parsed.query,
-            headers,
-        });
+        let mut handler = route.0(
+            Request {
+                params: route.1,
+                query: parsed.query,
+                headers,
+            },
+            self.context.clone(),
+        );
 
         let resp = if parsed.method == HttpVerbs::PATCH
             || parsed.method == HttpVerbs::POST
@@ -634,7 +646,10 @@ pub struct SpawnedRestServer {
 }
 
 impl SpawnedRestServer {
-    pub fn spawn(server: RestServer, stack_size: usize) -> Result<Self, HttpError> {
+    pub fn spawn<T: 'static + std::marker::Send + std::marker::Sync>(
+        server: RestServer<T>,
+        stack_size: usize,
+    ) -> Result<Self, HttpError> {
         let stop = server.shutdown.clone();
         let builder = thread::Builder::new().stack_size(stack_size);
         let handle = builder.spawn(move || server.start())?;
