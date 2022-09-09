@@ -112,13 +112,15 @@ pub enum BodyType {
 pub struct Response {
     pub status: u32,
     pub body: BodyType,
+    pub headers: Option<HashMap<String, String>>,
 }
 
 impl Response {
-    pub fn fixed_string(status: u32, body: &str) -> Self {
+    pub fn fixed_string(status: u32, headers: Option<HashMap<String, String>>, body: &str) -> Self {
         Response {
             status,
             body: BodyType::Fixed(body.as_bytes().to_vec()),
+            headers,
         }
     }
 }
@@ -173,24 +175,30 @@ impl<T> RequestHandler for SimpleHandler<T> {
 pub struct FixedHandler {
     status: u32,
     body: String,
+    headers: Option<HashMap<String, String>>,
 }
 
 impl FixedHandler {
-    pub fn new(status: u32, body: &str) -> Box<Self> {
+    pub fn new(status: u32, headers: Option<HashMap<String, String>>, body: &str) -> Box<Self> {
         Box::new(Self {
             status,
             body: body.to_string(),
+            headers,
         })
     }
 }
 
 impl RequestHandler for FixedHandler {
     fn chunk(&mut self, _chunk: Vec<u8>) -> HandlerResult {
-        HandlerResult::Abort(Response::fixed_string(self.status, self.body.as_str()))
+        HandlerResult::Abort(Response::fixed_string(
+            self.status,
+            self.headers.to_owned(),
+            self.body.as_str(),
+        ))
     }
 
     fn end(&mut self) -> Response {
-        Response::fixed_string(self.status, self.body.as_str())
+        Response::fixed_string(self.status, self.headers.to_owned(), self.body.as_str())
     }
 }
 
@@ -439,7 +447,7 @@ impl<T> RestServer<T> {
                 }
                 ContentLength::Chunked => self.handle_chunked_request(handler, &mut reader)?,
                 ContentLength::None => {
-                    Response::fixed_string(411, "Include length or send chunked")
+                    Response::fixed_string(411, None, "Include length or send chunked")
                 }
             }
         } else {
@@ -447,11 +455,16 @@ impl<T> RestServer<T> {
         };
 
         match resp.body {
-            BodyType::Fixed(body) => self.fixed_response(stream, resp.status, &body),
-            BodyType::StreamWithTrailers(body) => self.stream_response(stream, resp.status, body),
-            BodyType::Stream(body) => {
-                self.stream_response(stream, resp.status, Box::new(NoTrailers::new(body)))
+            BodyType::Fixed(body) => self.fixed_response(stream, resp.status, resp.headers, &body),
+            BodyType::StreamWithTrailers(body) => {
+                self.stream_response(stream, resp.status, resp.headers, body)
             }
+            BodyType::Stream(body) => self.stream_response(
+                stream,
+                resp.status,
+                resp.headers,
+                Box::new(NoTrailers::new(body)),
+            ),
         }
     }
 
@@ -523,7 +536,12 @@ impl<T> RestServer<T> {
     }
 
     fn send_not_http_conform_request(&self, stream: TcpStream) -> Result<(), HttpError> {
-        self.fixed_response(&stream, 400, "Not HTTP conform request\r\n".as_bytes())
+        self.fixed_response(
+            &stream,
+            400,
+            None,
+            "Not HTTP conform request\r\n".as_bytes(),
+        )
     }
 
     fn send_method_not_implemented(
@@ -534,6 +552,7 @@ impl<T> RestServer<T> {
         self.fixed_response(
             &stream,
             501,
+            None,
             format!("Method {} not implemented\r\n", method).as_bytes(),
         )
     }
@@ -546,42 +565,45 @@ impl<T> RestServer<T> {
         self.fixed_response(
             &stream,
             505,
+            None,
             format!("Verion {} not supported\r\n", version).as_bytes(),
         )
     }
 
     fn send_io_error(&self, stream: TcpStream) -> Result<(), HttpError> {
-        self.fixed_response(&stream, 400, "IO Error while reading\r\n".as_bytes())
+        self.fixed_response(&stream, 400, None, "IO Error while reading\r\n".as_bytes())
     }
 
     fn send_bad_headers(&self, stream: TcpStream) -> Result<(), HttpError> {
-        self.fixed_response(&stream, 400, "Invalid header data\r\n".as_bytes())
+        self.fixed_response(&stream, 400, None, "Invalid header data\r\n".as_bytes())
     }
 
     fn send_invalid_length(&self, stream: TcpStream) -> Result<(), HttpError> {
-        self.fixed_response(&stream, 411, "Length invalid\r\n".as_bytes())
+        self.fixed_response(&stream, 411, None, "Length invalid\r\n".as_bytes())
     }
 
     fn send_payload_to_large(&self, stream: TcpStream) -> Result<(), HttpError> {
-        self.fixed_response(&stream, 413, "Payload to large\r\n".as_bytes())
+        self.fixed_response(&stream, 413, None, "Payload to large\r\n".as_bytes())
     }
 
     fn send_not_found(&self, stream: TcpStream, path: String) -> Result<(), HttpError> {
         self.fixed_response(
             &stream,
             404,
+            None,
             format!("Route {} does not exists\r\n", path).as_bytes(),
         )
     }
 
     fn send_broken_chunk(&self, stream: TcpStream) -> Result<(), HttpError> {
-        self.fixed_response(&stream, 400, "Invalid chunk encoding\r\n".as_bytes())
+        self.fixed_response(&stream, 400, None, "Invalid chunk encoding\r\n".as_bytes())
     }
 
     fn stream_response(
         &self,
         mut stream: &TcpStream,
         status: u32,
+        headers: Option<HashMap<String, String>>,
         mut body: Box<dyn Streamable>,
     ) -> Result<(), HttpError> {
         let start = format!(
@@ -589,8 +611,14 @@ impl<T> RestServer<T> {
             status,
             status_text(status),
         );
-
         stream.write_all(start.as_bytes())?;
+
+        if let Some(headers) = headers {
+            for (key, value) in headers {
+                stream.write_all(format!("{}: {}\r\n", key, value).as_bytes())?;
+            }
+        }
+
         let trailer_names = body.trailer_names();
         let has_trailers = !trailer_names.is_empty();
         if has_trailers {
@@ -624,15 +652,22 @@ impl<T> RestServer<T> {
         &self,
         mut stream: &TcpStream,
         status: u32,
+        headers: Option<HashMap<String, String>>,
         body: &[u8],
     ) -> Result<(), HttpError> {
         let start = format!(
-            "HTTP/1.1 {} {}\r\nContent-Length: {}\r\n\r\n",
+            "HTTP/1.1 {} {}\r\nContent-Length: {}\r\n",
             status,
             status_text(status),
             body.len()
         );
         stream.write_all(start.as_bytes())?;
+        if let Some(headers) = headers {
+            for (key, value) in headers {
+                stream.write_all(format!("{}: {}\r\n", key, value).as_bytes())?;
+            }
+        }
+        stream.write_all("\r\n".as_bytes())?;
         stream.write_all(body)?;
         stream.flush()?;
 

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use embeddable_rest_server::{HttpError, Response, RestServer, SimpleHandler, SpawnedRestServer};
 use isahc::ReadResponseExt;
 
@@ -20,6 +22,7 @@ fn readme() -> Result<(), HttpError> {
         SimpleHandler::new(req, context, |req, context, body| {
             Response::fixed_string(
                 200,
+                Some(HashMap::from([("Foo".to_string(), "bar".to_string())])),
                 &format!(
                     "{} {}, thanks for {} bytes and {} headers",
                     context.greeting,
@@ -44,6 +47,7 @@ fn readme() -> Result<(), HttpError> {
     )
     .unwrap();
 
+    assert_eq!(res.headers()["foo"], "bar");
     assert_eq!(
         res.text().unwrap(),
         "Hello Bob, thanks for 9 bytes and 6 headers"

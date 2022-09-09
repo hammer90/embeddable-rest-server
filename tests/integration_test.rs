@@ -1,12 +1,12 @@
 mod common;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use common::{get, get_header, post, start_server};
 use embeddable_rest_server::{
     BodyType, FixedHandler, HandlerResult, HttpVerbs, RequestHandler, Response, SimpleHandler,
     Streamable,
 };
-use isahc::{ReadResponseExt, ResponseExt};
+use isahc::{http::header::CACHE_CONTROL, ReadResponseExt, ResponseExt};
 
 use crate::common::put_chunked;
 
@@ -27,6 +27,7 @@ fn fixed() {
             SimpleHandler::new(req, context, |_, _, _| Response {
                 status: 200,
                 body: BodyType::Fixed("fixed\r\n".as_bytes().to_vec()),
+                headers: None,
             })
         })],
         1024,
@@ -44,7 +45,7 @@ fn from_string() {
     let (port, _server) = start_server(
         vec![(HttpVerbs::GET, "/string".to_string(), |req, context| {
             SimpleHandler::new(req, context, |_, _, _| {
-                Response::fixed_string(202, "string\r\n")
+                Response::fixed_string(202, None, "string\r\n")
             })
         })],
         1024,
@@ -61,7 +62,7 @@ fn from_string() {
 fn fixed_handler() {
     let (port, _server) = start_server(
         vec![(HttpVerbs::GET, "/fixed-handler".to_string(), |_, _| {
-            FixedHandler::new(200, "fixed-handler\r\n")
+            FixedHandler::new(200, None, "fixed-handler\r\n")
         })],
         1024,
         42,
@@ -71,6 +72,35 @@ fn fixed_handler() {
 
     assert_eq!(res.status(), 200);
     assert_eq!(res.text().unwrap(), "fixed-handler\r\n");
+}
+
+#[test]
+fn fixed_handler_with_headers() {
+    let (port, _server) = start_server(
+        vec![(
+            HttpVerbs::GET,
+            "/fixed-handler-with-headers".to_string(),
+            |_, _| {
+                FixedHandler::new(
+                    200,
+                    Some(HashMap::from([
+                        ("Foo".to_string(), "bar".to_string()),
+                        ("Cache-Control".to_string(), "no-cache".to_string()),
+                    ])),
+                    "fixed-handler-with-headers\r\n",
+                )
+            },
+        )],
+        1024,
+        42,
+    );
+
+    let mut res = get(port, "/fixed-handler-with-headers");
+
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.headers()["foo"], "bar");
+    assert_eq!(res.headers()[CACHE_CONTROL], "no-cache");
+    assert_eq!(res.text().unwrap(), "fixed-handler-with-headers\r\n");
 }
 
 #[test]
@@ -86,6 +116,7 @@ fn chunked() {
                     ]
                     .into_iter(),
                 )),
+                headers: None,
             })
         })],
         1024,
@@ -100,12 +131,48 @@ fn chunked() {
 }
 
 #[test]
+fn chunked_with_headers() {
+    let (port, _server) = start_server(
+        vec![(
+            HttpVerbs::GET,
+            "/chunked-with-headers".to_string(),
+            |req, context| {
+                SimpleHandler::new(req, context, |_, _, _| Response {
+                    status: 200,
+                    body: BodyType::Stream(Box::new(
+                        [
+                            "Hello\r\n".as_bytes().to_vec(),
+                            "Headers\r\n".as_bytes().to_vec(),
+                        ]
+                        .into_iter(),
+                    )),
+                    headers: Some(HashMap::from([
+                        ("Foo".to_string(), "bar".to_string()),
+                        ("Cache-Control".to_string(), "no-cache".to_string()),
+                    ])),
+                })
+            },
+        )],
+        1024,
+        42,
+    );
+
+    let mut res = get(port, "/chunked-with-headers");
+
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.headers()["transfer-encoding"], "chunked");
+    assert_eq!(res.headers()["foo"], "bar");
+    assert_eq!(res.headers()[CACHE_CONTROL], "no-cache");
+    assert_eq!(res.text().unwrap(), "Hello\r\nHeaders\r\n");
+}
+
+#[test]
 fn query() {
     let (port, _server) = start_server(
         vec![(HttpVerbs::GET, "/query".to_string(), |req, context| {
             SimpleHandler::new(req, context, |req, _, _| {
                 assert_eq!(req.query.as_ref().unwrap(), "count&foo=bar");
-                Response::fixed_string(200, "queried\r\n")
+                Response::fixed_string(200, None, "queried\r\n")
             })
         })],
         1024,
@@ -158,6 +225,7 @@ fn trailers() {
             SimpleHandler::new(req, context, |_, _, _| Response {
                 status: 200,
                 body: BodyType::StreamWithTrailers(Box::new(WithTrailers::new())),
+                headers: None,
             })
         })],
         1024,
@@ -174,12 +242,44 @@ fn trailers() {
 }
 
 #[test]
+fn trailers_with_headers() {
+    let (port, _server) = start_server(
+        vec![(
+            HttpVerbs::GET,
+            "/trailered-with-headers".to_string(),
+            |req, context| {
+                SimpleHandler::new(req, context, |_, _, _| Response {
+                    status: 200,
+                    body: BodyType::StreamWithTrailers(Box::new(WithTrailers::new())),
+                    headers: Some(HashMap::from([
+                        ("Foo-Foo".to_string(), "bar-bar".to_string()),
+                        ("Cache-Control".to_string(), "no-cache".to_string()),
+                    ])),
+                })
+            },
+        )],
+        1024,
+        42,
+    );
+
+    let mut res = get(port, "/trailered-with-headers");
+
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.headers()["transfer-encoding"], "chunked");
+    assert_eq!(res.headers()["trailers"], "foo");
+    assert_eq!(res.headers()["foo-foo"], "bar-bar");
+    assert_eq!(res.headers()[CACHE_CONTROL], "no-cache");
+    assert_eq!(res.text().unwrap(), "Hello\r\nTrailers\r\n");
+    assert_eq!(res.trailer().try_get().unwrap()["foo"], "bar");
+}
+
+#[test]
 fn headers() {
     let (port, _server) = start_server(
         vec![(HttpVerbs::GET, "/headers".to_string(), |req, context| {
             SimpleHandler::new(req, context, |req, _, _| {
                 assert_eq!(req.headers["foo"], "bar");
-                Response::fixed_string(200, "heading\r\n")
+                Response::fixed_string(200, None, "heading\r\n")
             })
         })],
         1024,
@@ -198,7 +298,7 @@ fn body() {
         vec![(HttpVerbs::POST, "/body".to_string(), |req, context| {
             SimpleHandler::new(req, context, |_, _, data| {
                 assert_eq!(std::str::from_utf8(data.as_ref()).unwrap(), "Hello Data");
-                Response::fixed_string(200, "posted\r\n")
+                Response::fixed_string(200, None, "posted\r\n")
             })
         })],
         1024,
@@ -222,6 +322,7 @@ fn params() {
                     assert_eq!(req.params["foo"], "bar");
                     Response::fixed_string(
                         200,
+                        None,
                         format!("size: {}\r\n", req.params["foo"].len()).as_str(),
                     )
                 })
@@ -246,7 +347,7 @@ impl RequestHandler for ChunkedRequestHandler {
     }
 
     fn end(&mut self) -> Response {
-        Response::fixed_string(200, "chunked\r\n")
+        Response::fixed_string(200, None, "chunked\r\n")
     }
 }
 
@@ -272,7 +373,7 @@ fn body_chunked_collected() {
         vec![(HttpVerbs::PUT, "/collect".to_string(), |req, context| {
             SimpleHandler::new(req, context, |_, _, data| {
                 assert_eq!(std::str::from_utf8(data.as_ref()).unwrap(), "Hello Data");
-                Response::fixed_string(200, "collected\r\n")
+                Response::fixed_string(200, None, "collected\r\n")
             })
         })],
         1024,
@@ -297,7 +398,7 @@ impl RequestHandler for SmallChunkRequestHandler {
     }
 
     fn end(&mut self) -> Response {
-        Response::fixed_string(200, format!("{}\r\n", self.count).as_str())
+        Response::fixed_string(200, None, format!("{}\r\n", self.count).as_str())
     }
 }
 
@@ -349,7 +450,7 @@ fn with_context() {
             "/context".to_string(),
             |req, context: Arc<Context>| {
                 SimpleHandler::new(req, context, |_, context, _| {
-                    Response::fixed_string(200, &format!("path: '{}'\r\n", context.path))
+                    Response::fixed_string(200, None, &format!("path: '{}'\r\n", context.path))
                 })
             },
         )],

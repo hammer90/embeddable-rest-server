@@ -14,7 +14,6 @@ The primary focus is a stateless RESTful server, thus HTTP/2 features like State
 
 ## Missing but planned Features
 
-* sending of HTTP headers
 * access to HTTP trailers for incoming request
 * HTTPS support
 * handling of parallel request, most properly through:
@@ -47,6 +46,7 @@ embeddable_rest_server = { git = "https://github.com/hammer90/embeddable-rest-se
         SimpleHandler::new(req, context, |req, context, body| {
             Response::fixed_string(
                 200,
+                Some(HashMap::from([("Foo".to_string(), "bar".to_string())])),
                 &format!(
                     "{} {}, thanks for {} bytes and {} headers",
                     context.greeting,
@@ -67,6 +67,7 @@ embeddable_rest_server = { git = "https://github.com/hammer90/embeddable-rest-se
     
     let mut res = isahc::post(format!("http://localhost:{}/greeting/Bob", port).as_str(),"123456789").unwrap();
 
+    assert_eq!(res.headers()["foo"], "bar");
     assert_eq!(res.text().unwrap(), "Hello Bob, thanks for 9 bytes and 6 headers");
 
     spawned_server.stop();
