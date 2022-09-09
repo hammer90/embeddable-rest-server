@@ -138,7 +138,7 @@ pub enum HandlerResult {
 
 pub trait RequestHandler {
     fn chunk(&mut self, chunk: Vec<u8>) -> HandlerResult;
-    fn end(&mut self) -> Response;
+    fn end(&mut self, trailers: Option<HashMap<String, String>>) -> Response;
 }
 
 pub type SimpleRoute<T> = fn(req: &Request, context: &T, data: &Vec<u8>) -> Response;
@@ -167,7 +167,7 @@ impl<T> RequestHandler for SimpleHandler<T> {
         HandlerResult::Continue
     }
 
-    fn end(&mut self) -> Response {
+    fn end(&mut self, _: Option<HashMap<String, String>>) -> Response {
         (self.route)(&self.req, &self.context, &self.data)
     }
 }
@@ -197,7 +197,7 @@ impl RequestHandler for FixedHandler {
         ))
     }
 
-    fn end(&mut self) -> Response {
+    fn end(&mut self, _: Option<HashMap<String, String>>) -> Response {
         Response::fixed_string(self.status, self.headers.to_owned(), self.body.as_str())
     }
 }
@@ -427,6 +427,7 @@ impl<T> RestServer<T> {
 
         let headers = parse_headers(&mut reader)?;
         let len = self.extract_length(&headers)?;
+        let trailers = headers.get("trailers").map(|x| x.to_owned());
 
         let mut handler = route.0(
             Request {
@@ -445,13 +446,15 @@ impl<T> RestServer<T> {
                 ContentLength::Fixed(len) => {
                     self.handle_fixed_request(len, handler, &mut reader)?
                 }
-                ContentLength::Chunked => self.handle_chunked_request(handler, &mut reader)?,
+                ContentLength::Chunked => {
+                    self.handle_chunked_request(handler, trailers, &mut reader)?
+                }
                 ContentLength::None => {
                     Response::fixed_string(411, None, "Include length or send chunked")
                 }
             }
         } else {
-            handler.end()
+            handler.end(None)
         };
 
         match resp.body {
@@ -496,7 +499,7 @@ impl<T> RestServer<T> {
         if let HandlerResult::Abort(res) = self.read_in_chunks(len, &mut handler, reader)? {
             return Ok(res);
         }
-        Ok(handler.end())
+        Ok(handler.end(None))
     }
 
     fn read_chunk_length(
@@ -517,12 +520,25 @@ impl<T> RestServer<T> {
     fn handle_chunked_request(
         &self,
         mut handler: Box<dyn RequestHandler>,
+        trailers: Option<String>,
         reader: &mut BufReader<&TcpStream>,
     ) -> Result<Response, HttpError> {
         loop {
             let len = self.read_chunk_length(reader)?;
             if len == 0 {
-                return Ok(handler.end());
+                let mut extracted_trailers = None;
+                if let Some(trailers) = trailers {
+                    let mut parse_trailers = parse_headers(reader)?;
+                    let mut allowed_trailers = HashMap::with_capacity(parse_trailers.len());
+                    for expected_trailer in trailers.split(',') {
+                        let lower_case_trailer = expected_trailer.to_lowercase();
+                        if let Some(parsed_trailer) = parse_trailers.remove(&lower_case_trailer) {
+                            allowed_trailers.insert(lower_case_trailer, parsed_trailer);
+                        }
+                    }
+                    extracted_trailers = Some(allowed_trailers);
+                }
+                return Ok(handler.end(extracted_trailers));
             }
             if let HandlerResult::Abort(res) = self.read_in_chunks(len, &mut handler, reader)? {
                 return Ok(res);

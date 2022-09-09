@@ -14,7 +14,6 @@ The primary focus is a stateless RESTful server, thus HTTP/2 features like State
 
 ## Missing but planned Features
 
-* access to HTTP trailers for incoming request
 * HTTPS support
 * handling of parallel request, most properly through:
 * async support

@@ -1,7 +1,7 @@
 mod common;
 use std::{collections::HashMap, sync::Arc};
 
-use common::{get, get_header, post, start_server};
+use common::{get, get_header, post, send_raw, start_server};
 use embeddable_rest_server::{
     BodyType, FixedHandler, HandlerResult, HttpVerbs, RequestHandler, Response, SimpleHandler,
     Streamable,
@@ -346,7 +346,7 @@ impl RequestHandler for ChunkedRequestHandler {
         HandlerResult::Continue
     }
 
-    fn end(&mut self) -> Response {
+    fn end(&mut self, _: Option<HashMap<String, String>>) -> Response {
         Response::fixed_string(200, None, "chunked\r\n")
     }
 }
@@ -365,6 +365,62 @@ fn body_chunked() {
 
     assert_eq!(res.text().unwrap(), "chunked\r\n");
     assert_eq!(res.status(), 200);
+}
+
+#[test]
+fn body_chunked_raw() {
+    let (port, _server) = start_server(
+        vec![(HttpVerbs::PUT, "/chunks".to_string(), |_, _| {
+            Box::new(ChunkedRequestHandler {})
+        })],
+        1024,
+        42,
+    );
+
+    let res = send_raw(
+        port,
+        "PUT /chunks HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\na\r\nHello Data\r\n0\r\n\r\n",
+    );
+
+    assert_eq!(
+        res,
+        "HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\nchunked\r\n"
+    );
+}
+
+struct TraileredRequestHandler {}
+
+impl RequestHandler for TraileredRequestHandler {
+    fn chunk(&mut self, chunk: Vec<u8>) -> HandlerResult {
+        assert_eq!(std::str::from_utf8(chunk.as_ref()).unwrap(), "Hello Data");
+        HandlerResult::Continue
+    }
+
+    fn end(&mut self, trailers: Option<HashMap<String, String>>) -> Response {
+        assert_eq!(
+            trailers.unwrap(),
+            HashMap::from([("foo".to_string(), "bar".to_string())])
+        );
+        Response::fixed_string(200, None, "trailered\r\n")
+    }
+}
+
+#[test]
+fn body_trailers_raw() {
+    let (port, _server) = start_server(
+        vec![(HttpVerbs::PUT, "/chunks-trailers".to_string(), |_, _| {
+            Box::new(TraileredRequestHandler {})
+        })],
+        1024,
+        42,
+    );
+
+    let res = send_raw(port, "PUT /chunks-trailers HTTP/1.1\r\nTransfer-Encoding: chunked\r\nTrailers: Foo\r\n\r\na\r\nHello Data\r\n0\r\nFoo: bar\r\nNot-Listed-Trailer: Add-On\r\n\r\n");
+
+    assert_eq!(
+        res,
+        "HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\ntrailered\r\n"
+    );
 }
 
 #[test]
@@ -397,7 +453,7 @@ impl RequestHandler for SmallChunkRequestHandler {
         HandlerResult::Continue
     }
 
-    fn end(&mut self) -> Response {
+    fn end(&mut self, _: Option<HashMap<String, String>>) -> Response {
         Response::fixed_string(200, None, format!("{}\r\n", self.count).as_str())
     }
 }
