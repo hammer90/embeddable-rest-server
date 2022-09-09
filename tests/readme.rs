@@ -37,10 +37,17 @@ fn readme() -> Result<(), HttpError> {
     let spawned_server = SpawnedRestServer::spawn(server, 8192)?;
 
     // adding new routes is not possible after the server is started
-    
-    let mut res = isahc::post(format!("http://localhost:{}/greeting/Bob", port).as_str(),"123456789").unwrap();
 
-    assert_eq!(res.text().unwrap(), "Hello Bob, thanks for 9 bytes and 6 headers");
+    let mut res = isahc::post(
+        format!("http://localhost:{}/greeting/Bob", port).as_str(),
+        "123456789",
+    )
+    .unwrap();
+
+    assert_eq!(
+        res.text().unwrap(),
+        "Hello Bob, thanks for 9 bytes and 6 headers"
+    );
 
     spawned_server.stop();
     Ok(())
