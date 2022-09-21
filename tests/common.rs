@@ -20,7 +20,7 @@ fn setup_server<T>(
     buf_len: usize,
     context: T,
 ) -> Result<RestServer<T>, HttpError> {
-    let mut server = RestServer::new(format!("0.0.0.0:{}", port), buf_len, context)?;
+    let mut server = RestServer::new("0.0.0.0".to_string(), port, buf_len, context)?;
 
     for (verb, route, func) in routes {
         server = server.register(verb, route.as_str(), func)?;

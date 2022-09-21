@@ -9,10 +9,9 @@ mod mock_stream;
 use std::collections::HashMap;
 use std::error::Error as StdError;
 use std::io::{prelude::*, BufReader, Error as IoError};
-use std::net::{TcpListener, TcpStream, ToSocketAddrs};
+use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
 
 use headers::parse_headers;
 use parsed_first_line::ParsedFirstLine;
@@ -297,15 +296,13 @@ pub struct RestServer<T> {
     shutdown: Arc<Mutex<bool>>,
     buf_size: usize,
     context: Arc<T>,
+    addr: String,
+    port: u16,
 }
 
 impl<T> RestServer<T> {
-    pub fn new<A>(addr: A, buf_size: usize, context: T) -> Result<Self, HttpError>
-    where
-        A: ToSocketAddrs,
-    {
-        let listener = TcpListener::bind(addr)?;
-        listener.set_nonblocking(true)?;
+    pub fn new(addr: String, port: u16, buf_size: usize, context: T) -> Result<Self, HttpError> {
+        let listener = TcpListener::bind(format!("{}:{}", addr, port))?;
         let shutdown = Arc::new(Mutex::new(false));
         Ok(Self {
             listener,
@@ -313,23 +310,24 @@ impl<T> RestServer<T> {
             shutdown,
             buf_size,
             context: Arc::new(context),
+            addr,
+            port,
         })
     }
 
-    pub fn start(&self) -> Result<(), HttpError> {
+    pub fn start(self) -> Result<(), HttpError> {
         let stop = self.shutdown.clone();
         for stream in self.listener.incoming() {
+            if *stop.lock().unwrap() {
+                println!("shutting down");
+                break;
+            }
             if let Ok(stream) = stream {
                 let result = self.handle_connection_witherrors(stream);
                 if let Err(err) = result {
                     println!("{:?}", err);
                 }
             }
-            if *stop.lock().unwrap() {
-                println!("shutting down");
-                break;
-            }
-            thread::sleep(Duration::from_millis(100));
         }
         Ok(())
     }
@@ -694,6 +692,8 @@ impl<T> RestServer<T> {
 pub struct SpawnedRestServer {
     _handle: JoinHandle<Result<(), HttpError>>,
     stop: Arc<Mutex<bool>>,
+    addr: String,
+    port: u16,
 }
 
 impl SpawnedRestServer {
@@ -703,10 +703,14 @@ impl SpawnedRestServer {
     ) -> Result<Self, HttpError> {
         let stop = server.shutdown.clone();
         let builder = thread::Builder::new().stack_size(stack_size);
+        let addr = server.addr.to_owned();
+        let port = server.port;
         let handle = builder.spawn(move || server.start())?;
         Ok(SpawnedRestServer {
             _handle: handle,
             stop,
+            addr,
+            port,
         })
     }
 
@@ -724,7 +728,7 @@ impl SpawnedRestServer {
 impl Drop for SpawnedRestServer {
     fn drop(&mut self) {
         self.stop();
-        thread::sleep(Duration::from_millis(100));
+        let _ = TcpStream::connect(format!("{}:{}", self.addr, self.port).as_str()).unwrap();
     }
 }
 

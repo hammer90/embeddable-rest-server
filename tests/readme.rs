@@ -15,7 +15,7 @@ fn readme() -> Result<(), HttpError> {
     };
 
     // create the server
-    let mut server = RestServer::new(format!("0.0.0.0:{}", port), 2048, context)?;
+    let mut server = RestServer::new("0.0.0.0".to_string(), port, 2048, context)?;
 
     // register routes (for requests without or with only small bodies)
     server = server.post("/greeting/:name", |req, context| {
