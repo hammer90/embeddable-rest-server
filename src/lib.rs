@@ -728,7 +728,7 @@ impl SpawnedRestServer {
 impl Drop for SpawnedRestServer {
     fn drop(&mut self) {
         self.stop();
-        let _ = TcpStream::connect(format!("{}:{}", self.addr, self.port).as_str()).unwrap();
+        let _ = TcpStream::connect(format!("{}:{}", self.addr, self.port).as_str());
     }
 }
 
