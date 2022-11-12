@@ -3,8 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use common::{get, get_header, post, send_raw, start_server};
 use embeddable_rest_server::{
-    BodyType, FixedHandler, HandlerResult, HttpVerbs, RequestHandler, Response, SimpleHandler,
-    Streamable,
+    BodyType, CollectingHandler, HandlerResult, RequestHandler, Response, Route, Streamable,
 };
 use isahc::{http::header::CACHE_CONTROL, ReadResponseExt, ResponseExt};
 
@@ -23,13 +22,14 @@ fn not_found() {
 #[test]
 fn fixed() {
     let (port, _server) = start_server(
-        vec![(HttpVerbs::GET, "/ok".to_string(), |req, context| {
-            SimpleHandler::new(req, context, |_, _, _| Response {
+        vec![(
+            "/ok".to_string(),
+            Route::GET(|_, _| Response {
                 status: 200,
                 body: BodyType::Fixed("fixed\r\n".as_bytes().to_vec()),
                 headers: None,
-            })
-        })],
+            }),
+        )],
         1024,
         42,
     );
@@ -43,11 +43,10 @@ fn fixed() {
 #[test]
 fn from_string() {
     let (port, _server) = start_server(
-        vec![(HttpVerbs::GET, "/string".to_string(), |req, context| {
-            SimpleHandler::new(req, context, |_, _, _| {
-                Response::fixed_string(202, None, "string\r\n")
-            })
-        })],
+        vec![(
+            "/string".to_string(),
+            Route::GET(|_, _| Response::fixed_string(202, None, "string\r\n")),
+        )],
         1024,
         42,
     );
@@ -59,55 +58,11 @@ fn from_string() {
 }
 
 #[test]
-fn fixed_handler() {
-    let (port, _server) = start_server(
-        vec![(HttpVerbs::GET, "/fixed-handler".to_string(), |_, _| {
-            FixedHandler::new(200, None, "fixed-handler\r\n")
-        })],
-        1024,
-        42,
-    );
-
-    let mut res = get(port, "/fixed-handler");
-
-    assert_eq!(res.status(), 200);
-    assert_eq!(res.text().unwrap(), "fixed-handler\r\n");
-}
-
-#[test]
-fn fixed_handler_with_headers() {
-    let (port, _server) = start_server(
-        vec![(
-            HttpVerbs::GET,
-            "/fixed-handler-with-headers".to_string(),
-            |_, _| {
-                FixedHandler::new(
-                    200,
-                    Some(HashMap::from([
-                        ("Foo".to_string(), "bar".to_string()),
-                        ("Cache-Control".to_string(), "no-cache".to_string()),
-                    ])),
-                    "fixed-handler-with-headers\r\n",
-                )
-            },
-        )],
-        1024,
-        42,
-    );
-
-    let mut res = get(port, "/fixed-handler-with-headers");
-
-    assert_eq!(res.status(), 200);
-    assert_eq!(res.headers()["foo"], "bar");
-    assert_eq!(res.headers()[CACHE_CONTROL], "no-cache");
-    assert_eq!(res.text().unwrap(), "fixed-handler-with-headers\r\n");
-}
-
-#[test]
 fn chunked() {
     let (port, _server) = start_server(
-        vec![(HttpVerbs::GET, "/chunked".to_string(), |req, context| {
-            SimpleHandler::new(req, context, |_, _, _| Response {
+        vec![(
+            "/chunked".to_string(),
+            Route::GET(|_, _| Response {
                 status: 200,
                 body: BodyType::Stream(Box::new(
                     [
@@ -117,8 +72,8 @@ fn chunked() {
                     .into_iter(),
                 )),
                 headers: None,
-            })
-        })],
+            }),
+        )],
         1024,
         42,
     );
@@ -134,24 +89,21 @@ fn chunked() {
 fn chunked_with_headers() {
     let (port, _server) = start_server(
         vec![(
-            HttpVerbs::GET,
             "/chunked-with-headers".to_string(),
-            |req, context| {
-                SimpleHandler::new(req, context, |_, _, _| Response {
-                    status: 200,
-                    body: BodyType::Stream(Box::new(
-                        [
-                            "Hello\r\n".as_bytes().to_vec(),
-                            "Headers\r\n".as_bytes().to_vec(),
-                        ]
-                        .into_iter(),
-                    )),
-                    headers: Some(HashMap::from([
-                        ("Foo".to_string(), "bar".to_string()),
-                        ("Cache-Control".to_string(), "no-cache".to_string()),
-                    ])),
-                })
-            },
+            Route::GET(|_, _| Response {
+                status: 200,
+                body: BodyType::Stream(Box::new(
+                    [
+                        "Hello\r\n".as_bytes().to_vec(),
+                        "Headers\r\n".as_bytes().to_vec(),
+                    ]
+                    .into_iter(),
+                )),
+                headers: Some(HashMap::from([
+                    ("Foo".to_string(), "bar".to_string()),
+                    ("Cache-Control".to_string(), "no-cache".to_string()),
+                ])),
+            }),
         )],
         1024,
         42,
@@ -169,12 +121,13 @@ fn chunked_with_headers() {
 #[test]
 fn query() {
     let (port, _server) = start_server(
-        vec![(HttpVerbs::GET, "/query".to_string(), |req, context| {
-            SimpleHandler::new(req, context, |req, _, _| {
+        vec![(
+            "/query".to_string(),
+            Route::GET(|req, _| {
                 assert_eq!(req.query.as_ref().unwrap(), "count&foo=bar");
                 Response::fixed_string(200, None, "queried\r\n")
-            })
-        })],
+            }),
+        )],
         1024,
         42,
     );
@@ -221,13 +174,14 @@ impl Streamable for WithTrailers {
 #[test]
 fn trailers() {
     let (port, _server) = start_server(
-        vec![(HttpVerbs::GET, "/trailered".to_string(), |req, context| {
-            SimpleHandler::new(req, context, |_, _, _| Response {
+        vec![(
+            "/trailered".to_string(),
+            Route::GET(|_, _| Response {
                 status: 200,
                 body: BodyType::StreamWithTrailers(Box::new(WithTrailers::new())),
                 headers: None,
-            })
-        })],
+            }),
+        )],
         1024,
         42,
     );
@@ -245,18 +199,15 @@ fn trailers() {
 fn trailers_with_headers() {
     let (port, _server) = start_server(
         vec![(
-            HttpVerbs::GET,
             "/trailered-with-headers".to_string(),
-            |req, context| {
-                SimpleHandler::new(req, context, |_, _, _| Response {
-                    status: 200,
-                    body: BodyType::StreamWithTrailers(Box::new(WithTrailers::new())),
-                    headers: Some(HashMap::from([
-                        ("Foo-Foo".to_string(), "bar-bar".to_string()),
-                        ("Cache-Control".to_string(), "no-cache".to_string()),
-                    ])),
-                })
-            },
+            Route::GET(|_, _| Response {
+                status: 200,
+                body: BodyType::StreamWithTrailers(Box::new(WithTrailers::new())),
+                headers: Some(HashMap::from([
+                    ("Foo-Foo".to_string(), "bar-bar".to_string()),
+                    ("Cache-Control".to_string(), "no-cache".to_string()),
+                ])),
+            }),
         )],
         1024,
         42,
@@ -276,12 +227,13 @@ fn trailers_with_headers() {
 #[test]
 fn headers() {
     let (port, _server) = start_server(
-        vec![(HttpVerbs::GET, "/headers".to_string(), |req, context| {
-            SimpleHandler::new(req, context, |req, _, _| {
+        vec![(
+            "/headers".to_string(),
+            Route::GET(|req, _| {
                 assert_eq!(req.headers["foo"], "bar");
                 Response::fixed_string(200, None, "heading\r\n")
-            })
-        })],
+            }),
+        )],
         1024,
         42,
     );
@@ -295,12 +247,15 @@ fn headers() {
 #[test]
 fn body() {
     let (port, _server) = start_server(
-        vec![(HttpVerbs::POST, "/body".to_string(), |req, context| {
-            SimpleHandler::new(req, context, |_, _, data| {
-                assert_eq!(std::str::from_utf8(data.as_ref()).unwrap(), "Hello Data");
-                Response::fixed_string(200, None, "posted\r\n")
-            })
-        })],
+        vec![(
+            "/body".to_string(),
+            Route::POST(|req, context| {
+                CollectingHandler::new(req, context, |_, _, data| {
+                    assert_eq!(std::str::from_utf8(data.as_ref()).unwrap(), "Hello Data");
+                    Response::fixed_string(200, None, "posted\r\n")
+                })
+            }),
+        )],
         1024,
         42,
     );
@@ -315,18 +270,15 @@ fn body() {
 fn params() {
     let (port, _server) = start_server(
         vec![(
-            HttpVerbs::GET,
             "/param/:foo/size".to_string(),
-            |req, context| {
-                SimpleHandler::new(req, context, |req, _, _| {
-                    assert_eq!(req.params["foo"], "bar");
-                    Response::fixed_string(
-                        200,
-                        None,
-                        format!("size: {}\r\n", req.params["foo"].len()).as_str(),
-                    )
-                })
-            },
+            Route::GET(|req, _| {
+                assert_eq!(req.params["foo"], "bar");
+                Response::fixed_string(
+                    200,
+                    None,
+                    format!("size: {}\r\n", req.params["foo"].len()).as_str(),
+                )
+            }),
         )],
         1024,
         42,
@@ -354,9 +306,10 @@ impl RequestHandler for ChunkedRequestHandler {
 #[test]
 fn body_chunked() {
     let (port, _server) = start_server(
-        vec![(HttpVerbs::PUT, "/chunks".to_string(), |_, _| {
-            Box::new(ChunkedRequestHandler {})
-        })],
+        vec![(
+            "/chunks".to_string(),
+            Route::PUT(|_, _| Box::new(ChunkedRequestHandler {})),
+        )],
         1024,
         42,
     );
@@ -370,9 +323,10 @@ fn body_chunked() {
 #[test]
 fn body_chunked_raw() {
     let (port, _server) = start_server(
-        vec![(HttpVerbs::PUT, "/chunks".to_string(), |_, _| {
-            Box::new(ChunkedRequestHandler {})
-        })],
+        vec![(
+            "/chunks".to_string(),
+            Route::PUT(|_, _| Box::new(ChunkedRequestHandler {})),
+        )],
         1024,
         42,
     );
@@ -408,9 +362,10 @@ impl RequestHandler for TraileredRequestHandler {
 #[test]
 fn body_trailers_raw() {
     let (port, _server) = start_server(
-        vec![(HttpVerbs::PUT, "/chunks-trailers".to_string(), |_, _| {
-            Box::new(TraileredRequestHandler {})
-        })],
+        vec![(
+            "/chunks-trailers".to_string(),
+            Route::PUT(|_, _| Box::new(TraileredRequestHandler {})),
+        )],
         1024,
         42,
     );
@@ -426,12 +381,15 @@ fn body_trailers_raw() {
 #[test]
 fn body_chunked_collected() {
     let (port, _server) = start_server(
-        vec![(HttpVerbs::PUT, "/collect".to_string(), |req, context| {
-            SimpleHandler::new(req, context, |_, _, data| {
-                assert_eq!(std::str::from_utf8(data.as_ref()).unwrap(), "Hello Data");
-                Response::fixed_string(200, None, "collected\r\n")
-            })
-        })],
+        vec![(
+            "/collect".to_string(),
+            Route::PUT(|req, context| {
+                CollectingHandler::new(req, context, |_, _, data| {
+                    assert_eq!(std::str::from_utf8(data.as_ref()).unwrap(), "Hello Data");
+                    Response::fixed_string(200, None, "collected\r\n")
+                })
+            }),
+        )],
         1024,
         42,
     );
@@ -461,9 +419,10 @@ impl RequestHandler for SmallChunkRequestHandler {
 #[test]
 fn small() {
     let (port, _server) = start_server(
-        vec![(HttpVerbs::POST, "/small".to_string(), |_, _| {
-            Box::new(SmallChunkRequestHandler { count: 0 })
-        })],
+        vec![(
+            "/small".to_string(),
+            Route::POST(|_, _| Box::new(SmallChunkRequestHandler { count: 0 })),
+        )],
         10,
         42,
     );
@@ -477,9 +436,10 @@ fn small() {
 #[test]
 fn small_chunked() {
     let (port, _server) = start_server(
-        vec![(HttpVerbs::PUT, "/small-chunks".to_string(), |_, _| {
-            Box::new(SmallChunkRequestHandler { count: 0 })
-        })],
+        vec![(
+            "/small-chunks".to_string(),
+            Route::PUT(|_, _| Box::new(SmallChunkRequestHandler { count: 0 })),
+        )],
         10,
         42,
     );
@@ -502,13 +462,10 @@ fn with_context() {
 
     let (port, _server) = start_server(
         vec![(
-            HttpVerbs::GET,
             "/context".to_string(),
-            |req, context: Arc<Context>| {
-                SimpleHandler::new(req, context, |_, context, _| {
-                    Response::fixed_string(200, None, &format!("path: '{}'\r\n", context.path))
-                })
-            },
+            Route::GET(|_, context: Arc<Context>| {
+                Response::fixed_string(200, None, &format!("path: '{}'\r\n", context.path))
+            }),
         )],
         10,
         context,

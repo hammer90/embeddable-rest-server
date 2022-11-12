@@ -140,17 +140,17 @@ pub trait RequestHandler {
     fn end(&mut self, trailers: Option<HashMap<String, String>>) -> Response;
 }
 
-pub type SimpleRoute<T> = fn(req: &Request, context: &T, data: &Vec<u8>) -> Response;
+pub type CollectedRoute<T> = fn(req: &Request, context: &T, data: &Vec<u8>) -> Response;
 
-pub struct SimpleHandler<T> {
-    route: SimpleRoute<T>,
+pub struct CollectingHandler<T> {
+    route: CollectedRoute<T>,
     req: Request,
     data: Vec<u8>,
     context: T,
 }
 
-impl<T> SimpleHandler<T> {
-    pub fn new(req: Request, context: T, route: SimpleRoute<T>) -> Box<Self> {
+impl<T> CollectingHandler<T> {
+    pub fn new(req: Request, context: T, route: CollectedRoute<T>) -> Box<Self> {
         Box::new(Self {
             route,
             req,
@@ -160,7 +160,7 @@ impl<T> SimpleHandler<T> {
     }
 }
 
-impl<T> RequestHandler for SimpleHandler<T> {
+impl<T> RequestHandler for CollectingHandler<T> {
     fn chunk(&mut self, mut chunk: Vec<u8>) -> HandlerResult {
         self.data.append(&mut chunk);
         HandlerResult::Continue
@@ -171,37 +171,22 @@ impl<T> RequestHandler for SimpleHandler<T> {
     }
 }
 
-pub struct FixedHandler {
-    status: u32,
-    body: String,
-    headers: Option<HashMap<String, String>>,
-}
-
-impl FixedHandler {
-    pub fn new(status: u32, headers: Option<HashMap<String, String>>, body: &str) -> Box<Self> {
-        Box::new(Self {
-            status,
-            body: body.to_string(),
-            headers,
-        })
-    }
-}
-
-impl RequestHandler for FixedHandler {
-    fn chunk(&mut self, _chunk: Vec<u8>) -> HandlerResult {
-        HandlerResult::Abort(Response::fixed_string(
-            self.status,
-            self.headers.to_owned(),
-            self.body.as_str(),
-        ))
-    }
-
-    fn end(&mut self, _: Option<HashMap<String, String>>) -> Response {
-        Response::fixed_string(self.status, self.headers.to_owned(), self.body.as_str())
-    }
-}
-
 pub type RouteFn<T> = fn(req: Request, context: Arc<T>) -> Box<dyn RequestHandler>;
+pub type RouteFnWithoutData<T> = fn(req: Request, context: Arc<T>) -> Response;
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Route<T> {
+    GET(RouteFnWithoutData<T>),
+    POST(RouteFn<T>),
+    PUT(RouteFn<T>),
+    DELETE(RouteFnWithoutData<T>),
+    PATCH(RouteFn<T>),
+}
+
+enum RouteWithoutVerb<T> {
+    NoDate(RouteFnWithoutData<T>),
+    WithData(RouteFn<T>),
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum HttpVerbs {
@@ -226,61 +211,76 @@ impl HttpVerbs {
 }
 
 struct HttpRoutes<T> {
-    get: Routes<RouteFn<T>>,
+    get: Routes<RouteFnWithoutData<T>>,
     post: Routes<RouteFn<T>>,
     put: Routes<RouteFn<T>>,
     patch: Routes<RouteFn<T>>,
-    delete: Routes<RouteFn<T>>,
+    delete: Routes<RouteFnWithoutData<T>>,
 }
 
 impl<T> HttpRoutes<T> {
     fn new() -> Self {
         Self {
-            get: Routes::<RouteFn<T>>::new(),
+            get: Routes::<RouteFnWithoutData<T>>::new(),
             post: Routes::<RouteFn<T>>::new(),
             put: Routes::<RouteFn<T>>::new(),
             patch: Routes::<RouteFn<T>>::new(),
-            delete: Routes::<RouteFn<T>>::new(),
+            delete: Routes::<RouteFnWithoutData<T>>::new(),
         }
     }
 
-    fn add(self, verb: HttpVerbs, route: &str, func: RouteFn<T>) -> Result<Self, RoutesError> {
-        match verb {
-            HttpVerbs::GET => Ok(Self {
+    fn add(self, route: &str, func: Route<T>) -> Result<Self, RoutesError> {
+        match func {
+            Route::GET(func) => Ok(Self {
                 get: self.get.add(route, func)?,
                 ..self
             }),
-            HttpVerbs::POST => Ok(Self {
+            Route::POST(func) => Ok(Self {
                 post: self.post.add(route, func)?,
                 ..self
             }),
-            HttpVerbs::PUT => Ok(Self {
+            Route::PUT(func) => Ok(Self {
                 put: self.put.add(route, func)?,
                 ..self
             }),
-            HttpVerbs::PATCH => Ok(Self {
+            Route::PATCH(func) => Ok(Self {
                 patch: self.patch.add(route, func)?,
                 ..self
             }),
-            HttpVerbs::DELETE => Ok(Self {
+            Route::DELETE(func) => Ok(Self {
                 delete: self.delete.add(route, func)?,
                 ..self
             }),
         }
     }
 
-    fn find_verb(&self, verb: &HttpVerbs) -> &Routes<RouteFn<T>> {
+    fn find(
+        &self,
+        verb: &HttpVerbs,
+        route: &str,
+    ) -> Option<(RouteWithoutVerb<T>, HashMap<String, String>)> {
         match verb {
-            HttpVerbs::GET => &self.get,
-            HttpVerbs::POST => &self.post,
-            HttpVerbs::PUT => &self.put,
-            HttpVerbs::PATCH => &self.patch,
-            HttpVerbs::DELETE => &self.delete,
+            HttpVerbs::GET => self
+                .get
+                .find(route)
+                .map(|r| (RouteWithoutVerb::NoDate(r.0), r.1)),
+            HttpVerbs::POST => self
+                .post
+                .find(route)
+                .map(|r| (RouteWithoutVerb::WithData(r.0), r.1)),
+            HttpVerbs::PUT => self
+                .put
+                .find(route)
+                .map(|r| (RouteWithoutVerb::WithData(r.0), r.1)),
+            HttpVerbs::PATCH => self
+                .patch
+                .find(route)
+                .map(|r| (RouteWithoutVerb::WithData(r.0), r.1)),
+            HttpVerbs::DELETE => self
+                .delete
+                .find(route)
+                .map(|r| (RouteWithoutVerb::NoDate(r.0), r.1)),
         }
-    }
-
-    fn find(&self, verb: &HttpVerbs, route: &str) -> Option<(RouteFn<T>, HashMap<String, String>)> {
-        self.find_verb(verb).find(route)
     }
 }
 
@@ -332,36 +332,31 @@ impl<T> RestServer<T> {
         Ok(())
     }
 
-    pub fn register(
-        self,
-        verb: HttpVerbs,
-        route: &str,
-        func: RouteFn<T>,
-    ) -> Result<Self, HttpError> {
+    pub fn register(self, route: &str, func: Route<T>) -> Result<Self, HttpError> {
         Ok(Self {
-            routes: self.routes.add(verb, route, func)?,
+            routes: self.routes.add(route, func)?,
             ..self
         })
     }
 
-    pub fn get(self, route: &str, func: RouteFn<T>) -> Result<Self, HttpError> {
-        self.register(HttpVerbs::GET, route, func)
+    pub fn get(self, route: &str, func: RouteFnWithoutData<T>) -> Result<Self, HttpError> {
+        self.register(route, Route::GET(func))
     }
 
     pub fn post(self, route: &str, func: RouteFn<T>) -> Result<Self, HttpError> {
-        self.register(HttpVerbs::POST, route, func)
+        self.register(route, Route::POST(func))
     }
 
     pub fn put(self, route: &str, func: RouteFn<T>) -> Result<Self, HttpError> {
-        self.register(HttpVerbs::PUT, route, func)
+        self.register(route, Route::PUT(func))
     }
 
-    pub fn delete(self, route: &str, func: RouteFn<T>) -> Result<Self, HttpError> {
-        self.register(HttpVerbs::DELETE, route, func)
+    pub fn delete(self, route: &str, func: RouteFnWithoutData<T>) -> Result<Self, HttpError> {
+        self.register(route, Route::DELETE(func))
     }
 
     pub fn patch(self, route: &str, func: RouteFn<T>) -> Result<Self, HttpError> {
-        self.register(HttpVerbs::PATCH, route, func)
+        self.register(route, Route::PATCH(func))
     }
 
     fn handle_connection_witherrors(&self, stream: TcpStream) -> Result<(), HttpError> {
@@ -427,32 +422,36 @@ impl<T> RestServer<T> {
         let len = self.extract_length(&headers)?;
         let trailers = headers.get("trailers").map(|x| x.to_owned());
 
-        let mut handler = route.0(
-            Request {
-                params: route.1,
-                query: parsed.query,
-                headers,
-            },
-            self.context.clone(),
-        );
-
-        let resp = if parsed.method == HttpVerbs::PATCH
-            || parsed.method == HttpVerbs::POST
-            || parsed.method == HttpVerbs::PUT
-        {
-            match len {
-                ContentLength::Fixed(len) => {
-                    self.handle_fixed_request(len, handler, &mut reader)?
-                }
-                ContentLength::Chunked => {
-                    self.handle_chunked_request(handler, trailers, &mut reader)?
-                }
-                ContentLength::None => {
-                    Response::fixed_string(411, None, "Include length or send chunked")
+        let resp = match route.0 {
+            RouteWithoutVerb::NoDate(func) => func(
+                Request {
+                    params: route.1,
+                    query: parsed.query,
+                    headers,
+                },
+                self.context.clone(),
+            ),
+            RouteWithoutVerb::WithData(func) => {
+                let handler = func(
+                    Request {
+                        params: route.1,
+                        query: parsed.query,
+                        headers,
+                    },
+                    self.context.clone(),
+                );
+                match len {
+                    ContentLength::Fixed(len) => {
+                        self.handle_fixed_request(len, handler, &mut reader)?
+                    }
+                    ContentLength::Chunked => {
+                        self.handle_chunked_request(handler, trailers, &mut reader)?
+                    }
+                    ContentLength::None => {
+                        Response::fixed_string(411, None, "Include length or send chunked")
+                    }
                 }
             }
-        } else {
-            handler.end(None)
         };
 
         match resp.body {

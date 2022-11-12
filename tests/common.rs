@@ -1,11 +1,11 @@
 use std::io::prelude::*;
 use std::net::TcpStream;
 
-use embeddable_rest_server::{HttpError, HttpVerbs, RestServer, RouteFn, SpawnedRestServer};
+use embeddable_rest_server::{HttpError, RestServer, Route, SpawnedRestServer};
 use isahc::{Body, Request, RequestExt, Response};
 
 pub fn start_server<T: 'static + std::marker::Send + std::marker::Sync>(
-    routes: Vec<(HttpVerbs, String, RouteFn<T>)>,
+    routes: Vec<(String, Route<T>)>,
     buf_len: usize,
     context: T,
 ) -> (u16, SpawnedRestServer) {
@@ -16,14 +16,14 @@ pub fn start_server<T: 'static + std::marker::Send + std::marker::Sync>(
 
 fn setup_server<T>(
     port: u16,
-    routes: Vec<(HttpVerbs, String, RouteFn<T>)>,
+    routes: Vec<(String, Route<T>)>,
     buf_len: usize,
     context: T,
 ) -> Result<RestServer<T>, HttpError> {
     let mut server = RestServer::new("0.0.0.0".to_string(), port, buf_len, context)?;
 
-    for (verb, route, func) in routes {
-        server = server.register(verb, route.as_str(), func)?;
+    for (route, func) in routes {
+        server = server.register(route.as_str(), func)?;
     }
 
     Ok(server)

@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use embeddable_rest_server::{HttpError, Response, RestServer, SimpleHandler, SpawnedRestServer};
+use embeddable_rest_server::{
+    CollectingHandler, HttpError, Response, RestServer, SpawnedRestServer,
+};
 use isahc::ReadResponseExt;
 
 struct Context {
@@ -17,9 +19,13 @@ fn readme() -> Result<(), HttpError> {
     // create the server
     let mut server = RestServer::new("0.0.0.0".to_string(), port, 2048, context)?;
 
-    // register routes (for requests without or with only small bodies)
+    // register routes without body
+    server = server.get("/info", |_, _| {
+        Response::fixed_string(200, None, "Hello World")
+    })?;
+    // register routes with only small bodies
     server = server.post("/greeting/:name", |req, context| {
-        SimpleHandler::new(req, context, |req, context, body| {
+        CollectingHandler::new(req, context, |req, context, body| {
             Response::fixed_string(
                 200,
                 Some(HashMap::from([("Foo".to_string(), "bar".to_string())])),
@@ -40,6 +46,9 @@ fn readme() -> Result<(), HttpError> {
     let spawned_server = SpawnedRestServer::spawn(server, 8192)?;
 
     // adding new routes is not possible after the server is started
+
+    let mut res = isahc::get(format!("http://localhost:{}/info", port).as_str()).unwrap();
+    assert_eq!(res.text().unwrap(), "Hello World");
 
     let mut res = isahc::post(
         format!("http://localhost:{}/greeting/Bob", port).as_str(),
