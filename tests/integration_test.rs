@@ -3,7 +3,8 @@ use std::{collections::HashMap, sync::Arc};
 
 use common::{get, get_header, post, send_raw, start_server};
 use embeddable_rest_server::{
-    BodyType, CollectingHandler, HandlerResult, RequestHandler, Response, Route, Streamable,
+    BodyType, CancelHandler, CollectingHandler, HandlerResult, RequestHandler, Response, Route,
+    Streamable,
 };
 use isahc::{http::header::CACHE_CONTROL, ReadResponseExt, ResponseExt};
 
@@ -55,6 +56,51 @@ fn from_string() {
 
     assert_eq!(res.status(), 202);
     assert_eq!(res.text().unwrap(), "string\r\n");
+}
+
+#[test]
+fn cancel_handler() {
+    let (port, _server) = start_server(
+        vec![(
+            "/fixed-handler".to_string(),
+            Route::POST(|_, _| CancelHandler::new(200, None, "fixed-handler\r\n")),
+        )],
+        1024,
+        42,
+    );
+
+    let mut res = post(port, "/fixed-handler", "don't care");
+
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.text().unwrap(), "fixed-handler\r\n");
+}
+
+#[test]
+fn cancel_handler_with_headers() {
+    let (port, _server) = start_server(
+        vec![(
+            "/fixed-handler-with-headers".to_string(),
+            Route::POST(|_, _| {
+                CancelHandler::new(
+                    200,
+                    Some(HashMap::from([
+                        ("Foo".to_string(), "bar".to_string()),
+                        ("Cache-Control".to_string(), "no-cache".to_string()),
+                    ])),
+                    "fixed-handler-with-headers\r\n",
+                )
+            }),
+        )],
+        1024,
+        42,
+    );
+
+    let mut res = post(port, "/fixed-handler-with-headers", "don't care");
+
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.headers()["foo"], "bar");
+    assert_eq!(res.headers()[CACHE_CONTROL], "no-cache");
+    assert_eq!(res.text().unwrap(), "fixed-handler-with-headers\r\n");
 }
 
 #[test]

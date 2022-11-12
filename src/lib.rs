@@ -140,6 +140,36 @@ pub trait RequestHandler {
     fn end(&mut self, trailers: Option<HashMap<String, String>>) -> Response;
 }
 
+pub struct CancelHandler {
+    status: u32,
+    body: String,
+    headers: Option<HashMap<String, String>>,
+}
+
+impl CancelHandler {
+    pub fn new(status: u32, headers: Option<HashMap<String, String>>, body: &str) -> Box<Self> {
+        Box::new(Self {
+            status,
+            body: body.to_string(),
+            headers,
+        })
+    }
+}
+
+impl RequestHandler for CancelHandler {
+    fn chunk(&mut self, _chunk: Vec<u8>) -> HandlerResult {
+        HandlerResult::Abort(Response::fixed_string(
+            self.status,
+            self.headers.to_owned(),
+            self.body.as_str(),
+        ))
+    }
+
+    fn end(&mut self, _: Option<HashMap<String, String>>) -> Response {
+        Response::fixed_string(self.status, self.headers.to_owned(), self.body.as_str())
+    }
+}
+
 pub type CollectedRoute<T> = fn(req: &Request, context: &T, data: &Vec<u8>) -> Response;
 
 pub struct CollectingHandler<T> {
