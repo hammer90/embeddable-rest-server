@@ -170,7 +170,7 @@ impl RequestHandler for CancelHandler {
     }
 }
 
-pub type CollectedRoute<T> = fn(req: &Request, context: &T, data: &Vec<u8>) -> Response;
+pub type CollectedRoute<T> = fn(req: &Request, context: &T, data: &[u8]) -> Response;
 
 pub struct CollectingHandler<T> {
     route: CollectedRoute<T>,
@@ -188,6 +188,13 @@ impl<T> CollectingHandler<T> {
             context,
         })
     }
+}
+
+#[macro_export]
+macro_rules! collect_body {
+    ($route:expr) => {
+        |req, context| CollectingHandler::new(req, context, $route);
+    };
 }
 
 impl<T> RequestHandler for CollectingHandler<T> {
