@@ -12,6 +12,7 @@ use std::io::{prelude::*, BufReader, Error as IoError};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use headers::parse_headers;
 use parsed_first_line::ParsedFirstLine;
@@ -335,10 +336,17 @@ pub struct RestServer<T> {
     context: Arc<T>,
     addr: String,
     port: u16,
+    read_timeout: Option<Duration>,
 }
 
 impl<T> RestServer<T> {
-    pub fn new(addr: String, port: u16, buf_size: usize, context: T) -> Result<Self, HttpError> {
+    pub fn new(
+        addr: String,
+        port: u16,
+        buf_size: usize,
+        context: T,
+        read_timeout: Option<Duration>,
+    ) -> Result<Self, HttpError> {
         let listener = TcpListener::bind(format!("{}:{}", addr, port))?;
         let shutdown = Arc::new(Mutex::new(false));
         Ok(Self {
@@ -349,6 +357,7 @@ impl<T> RestServer<T> {
             context: Arc::new(context),
             addr,
             port,
+            read_timeout,
         })
     }
 
@@ -439,6 +448,9 @@ impl<T> RestServer<T> {
     }
 
     fn handle_connection(&self, stream: &TcpStream) -> Result<(), HttpError> {
+        if let Some(timeout) = self.read_timeout {
+            let _ = stream.set_read_timeout(Some(timeout))?;
+        }
         let mut reader = BufReader::with_capacity(self.buf_size, stream);
         let mut start = String::new();
         let len = reader.read_line(&mut start)?;
@@ -657,7 +669,7 @@ impl<T> RestServer<T> {
         mut body: Box<dyn Streamable>,
     ) -> Result<(), HttpError> {
         let start = format!(
-            "HTTP/1.1 {} {}\r\nTransfer-Encoding: chunked\r\n",
+            "HTTP/1.1 {} {}\r\nConnection: Close\r\nTransfer-Encoding: chunked\r\n",
             status,
             status_text(status),
         );
@@ -706,7 +718,7 @@ impl<T> RestServer<T> {
         body: &[u8],
     ) -> Result<(), HttpError> {
         let start = format!(
-            "HTTP/1.1 {} {}\r\nContent-Length: {}\r\n",
+            "HTTP/1.1 {} {}\r\nConnection: Close\r\nContent-Length: {}\r\n",
             status,
             status_text(status),
             body.len()

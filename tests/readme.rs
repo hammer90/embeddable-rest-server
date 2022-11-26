@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 
 use embeddable_rest_server::{
     CollectingHandler, HttpError, Response, RestServer, SpawnedRestServer,
@@ -17,7 +17,13 @@ fn readme() -> Result<(), HttpError> {
     };
 
     // create the server
-    let mut server = RestServer::new("0.0.0.0".to_string(), port, 2048, context)?;
+    let mut server = RestServer::new(
+        "0.0.0.0".to_string(),
+        port,
+        2048,
+        context,
+        Some(Duration::from_secs(2)),
+    )?;
 
     // register routes without body
     server = server.get("/info", |_, _| {

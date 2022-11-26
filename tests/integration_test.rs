@@ -384,7 +384,7 @@ fn body_chunked_raw() {
 
     assert_eq!(
         res,
-        "HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\nchunked\r\n"
+        "HTTP/1.1 200 OK\r\nConnection: Close\r\nContent-Length: 9\r\n\r\nchunked\r\n"
     );
 }
 
@@ -420,7 +420,7 @@ fn body_trailers_raw() {
 
     assert_eq!(
         res,
-        "HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\ntrailered\r\n"
+        "HTTP/1.1 200 OK\r\nConnection: Close\r\nContent-Length: 11\r\n\r\ntrailered\r\n"
     );
 }
 
