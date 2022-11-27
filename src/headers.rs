@@ -28,12 +28,13 @@ pub fn parse_headers<R: Read>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mock_stream::MockReadableStream;
 
     #[test]
     fn lowercases_headers() {
-        let stream = MockReadableStream::new(vec!["Host: localhost", "Content-Length: 42", ""]);
-        let mut reader = BufReader::new(stream);
+        let stream = vec!["Host: localhost", "Content-Length: 42", ""]
+            .join("\r\n")
+            .into_bytes();
+        let mut reader = BufReader::new(&stream[..]);
 
         assert_eq!(
             parse_headers(&mut reader),
@@ -47,8 +48,8 @@ mod tests {
 
     #[test]
     fn missing_space() {
-        let stream = MockReadableStream::new(vec!["Host:localhost", ""]);
-        let mut reader = BufReader::new(stream);
+        let stream = vec!["Host:localhost", ""].join("\r\n").into_bytes();
+        let mut reader = BufReader::new(&stream[..]);
 
         assert_eq!(
             parse_headers(&mut reader),

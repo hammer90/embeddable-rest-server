@@ -3,9 +3,6 @@ mod parsed_first_line;
 mod routes;
 mod status_text;
 
-#[cfg(test)]
-mod mock_stream;
-
 use std::collections::HashMap;
 use std::error::Error as StdError;
 use std::io::{prelude::*, BufReader, Error as IoError};
