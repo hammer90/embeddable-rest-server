@@ -15,5 +15,4 @@ readme = "README.md"
 [dependencies]
 
 [dev-dependencies]
-portpicker = "0.1.1"
 isahc = "1.7.1"

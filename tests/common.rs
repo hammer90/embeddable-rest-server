@@ -9,18 +9,17 @@ pub fn start_server<T: 'static + std::marker::Send + std::marker::Sync>(
     buf_len: usize,
     context: T,
 ) -> (u16, SpawnedRestServer) {
-    let port = portpicker::pick_unused_port().unwrap();
-    let server = setup_server(port, routes, buf_len, context).unwrap();
+    let server = setup_server(routes, buf_len, context).unwrap();
+    let port = server.port().unwrap();
     (port, SpawnedRestServer::spawn(server, 8192).unwrap())
 }
 
 fn setup_server<T>(
-    port: u16,
     routes: Vec<(String, Route<T>)>,
     buf_len: usize,
     context: T,
 ) -> Result<RestServer<T>, HttpError> {
-    let mut server = RestServer::new("0.0.0.0".to_string(), port, buf_len, context, None)?;
+    let mut server = RestServer::new("0.0.0.0".to_string(), 0, buf_len, context, None)?;
 
     for (route, func) in routes {
         server = server.register(route.as_str(), func)?;

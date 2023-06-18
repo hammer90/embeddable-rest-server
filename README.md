@@ -46,6 +46,9 @@ embeddable_rest_server = { git = "https://github.com/hammer90/embeddable-rest-se
         Some(Duration::from_secs(2)),
     )?;
 
+    // if port is 0, the OS will choose a random free port which is accessible via
+    let port = server.port().expect("port should be accessible");
+
     // register routes without body
     server = server.get("/info", |_, _| {
         Response::fixed_string(200, None, "Hello World")

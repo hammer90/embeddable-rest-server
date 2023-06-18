@@ -358,6 +358,12 @@ impl<T> RestServer<T> {
         })
     }
 
+    pub fn port(&self) -> Result<u16, IoError> {
+        self.listener
+            .local_addr()
+            .map(|local_addr| local_addr.port())
+    }
+
     pub fn start(self) -> Result<(), HttpError> {
         let stop = self.shutdown.clone();
         for stream in self.listener.incoming() {

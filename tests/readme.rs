@@ -11,7 +11,6 @@ struct Context {
 
 #[test]
 fn readme() -> Result<(), HttpError> {
-    let port = portpicker::pick_unused_port().unwrap();
     let context = Context {
         greeting: "Hello".to_string(),
     };
@@ -19,11 +18,13 @@ fn readme() -> Result<(), HttpError> {
     // create the server
     let mut server = RestServer::new(
         "0.0.0.0".to_string(),
-        port,
+        0,
         2048,
         context,
         Some(Duration::from_secs(2)),
     )?;
+    // the OS will choose a random free port instead of opening port 0
+    let port = server.port().expect("port should be accessible");
 
     // register routes without body
     server = server.get("/info", |_, _| {
