@@ -191,7 +191,7 @@ impl<T> CollectingHandler<T> {
 #[macro_export]
 macro_rules! collect_body {
     ($route:expr) => {
-        |req, context| CollectingHandler::new(req, context, $route);
+        |req, context| $crate::CollectingHandler::new(req, context, $route);
     };
 }
 
