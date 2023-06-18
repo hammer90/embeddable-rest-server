@@ -406,19 +406,19 @@ impl<T> RestServer<T> {
         let result = self.handle_connection(&stream);
         match result {
             Err(HttpError::Responseable(responseable)) => match responseable {
-                ResponseableError::NotHttpConform => self.send_not_http_conform_request(stream),
+                ResponseableError::NotHttpConform => send_not_http_conform_request(stream),
                 ResponseableError::UnsupportedVersion(version) => {
-                    self.send_unsupported_version(stream, version)
+                    send_unsupported_version(stream, version)
                 }
                 ResponseableError::MethodNotImplemented(method) => {
-                    self.send_method_not_implemented(stream, method)
+                    send_method_not_implemented(stream, method)
                 }
-                ResponseableError::NotFound(path) => self.send_not_found(stream, path),
-                ResponseableError::BadHeader(_) => self.send_bad_headers(stream),
-                ResponseableError::InvalidLength => self.send_invalid_length(stream),
-                ResponseableError::PayloadToLarge => self.send_payload_to_large(stream),
-                ResponseableError::BrokenChunk => self.send_broken_chunk(stream),
-                ResponseableError::IO => self.send_io_error(stream),
+                ResponseableError::NotFound(path) => send_not_found(stream, path),
+                ResponseableError::BadHeader(_) => send_bad_headers(stream),
+                ResponseableError::InvalidLength => send_invalid_length(stream),
+                ResponseableError::PayloadToLarge => send_payload_to_large(stream),
+                ResponseableError::BrokenChunk => send_broken_chunk(stream),
+                ResponseableError::IO => send_io_error(stream),
             },
             result => result,
         }
@@ -446,7 +446,7 @@ impl<T> RestServer<T> {
 
     fn handle_connection(&self, stream: &TcpStream) -> Result<(), HttpError> {
         if let Some(timeout) = self.read_timeout {
-            let _ = stream.set_read_timeout(Some(timeout))?;
+            stream.set_read_timeout(Some(timeout))?;
         }
         let mut reader = BufReader::with_capacity(self.buf_size, stream);
         let mut start = String::new();
@@ -501,11 +501,11 @@ impl<T> RestServer<T> {
         };
 
         match resp.body {
-            BodyType::Fixed(body) => self.fixed_response(stream, resp.status, resp.headers, &body),
+            BodyType::Fixed(body) => fixed_response(stream, resp.status, resp.headers, &body),
             BodyType::StreamWithTrailers(body) => {
-                self.stream_response(stream, resp.status, resp.headers, body)
+                stream_response(stream, resp.status, resp.headers, body)
             }
-            BodyType::Stream(body) => self.stream_response(
+            BodyType::Stream(body) => stream_response(
                 stream,
                 resp.status,
                 resp.headers,
@@ -593,145 +593,135 @@ impl<T> RestServer<T> {
             }
         }
     }
+}
 
-    fn send_not_http_conform_request(&self, stream: TcpStream) -> Result<(), HttpError> {
-        self.fixed_response(
-            &stream,
-            400,
-            None,
-            "Not HTTP conform request\r\n".as_bytes(),
-        )
-    }
+fn send_not_http_conform_request(stream: TcpStream) -> Result<(), HttpError> {
+    fixed_response(
+        &stream,
+        400,
+        None,
+        "Not HTTP conform request\r\n".as_bytes(),
+    )
+}
 
-    fn send_method_not_implemented(
-        &self,
-        stream: TcpStream,
-        method: String,
-    ) -> Result<(), HttpError> {
-        self.fixed_response(
-            &stream,
-            501,
-            None,
-            format!("Method {} not implemented\r\n", method).as_bytes(),
-        )
-    }
+fn send_method_not_implemented(stream: TcpStream, method: String) -> Result<(), HttpError> {
+    fixed_response(
+        &stream,
+        501,
+        None,
+        format!("Method {} not implemented\r\n", method).as_bytes(),
+    )
+}
 
-    fn send_unsupported_version(
-        &self,
-        stream: TcpStream,
-        version: String,
-    ) -> Result<(), HttpError> {
-        self.fixed_response(
-            &stream,
-            505,
-            None,
-            format!("Verion {} not supported\r\n", version).as_bytes(),
-        )
-    }
+fn send_unsupported_version(stream: TcpStream, version: String) -> Result<(), HttpError> {
+    fixed_response(
+        &stream,
+        505,
+        None,
+        format!("Version {} not supported\r\n", version).as_bytes(),
+    )
+}
 
-    fn send_io_error(&self, stream: TcpStream) -> Result<(), HttpError> {
-        self.fixed_response(&stream, 400, None, "IO Error while reading\r\n".as_bytes())
-    }
+fn send_io_error(stream: TcpStream) -> Result<(), HttpError> {
+    fixed_response(&stream, 400, None, "IO Error while reading\r\n".as_bytes())
+}
 
-    fn send_bad_headers(&self, stream: TcpStream) -> Result<(), HttpError> {
-        self.fixed_response(&stream, 400, None, "Invalid header data\r\n".as_bytes())
-    }
+fn send_bad_headers(stream: TcpStream) -> Result<(), HttpError> {
+    fixed_response(&stream, 400, None, "Invalid header data\r\n".as_bytes())
+}
 
-    fn send_invalid_length(&self, stream: TcpStream) -> Result<(), HttpError> {
-        self.fixed_response(&stream, 411, None, "Length invalid\r\n".as_bytes())
-    }
+fn send_invalid_length(stream: TcpStream) -> Result<(), HttpError> {
+    fixed_response(&stream, 411, None, "Length invalid\r\n".as_bytes())
+}
 
-    fn send_payload_to_large(&self, stream: TcpStream) -> Result<(), HttpError> {
-        self.fixed_response(&stream, 413, None, "Payload to large\r\n".as_bytes())
-    }
+fn send_payload_to_large(stream: TcpStream) -> Result<(), HttpError> {
+    fixed_response(&stream, 413, None, "Payload to large\r\n".as_bytes())
+}
 
-    fn send_not_found(&self, stream: TcpStream, path: String) -> Result<(), HttpError> {
-        self.fixed_response(
-            &stream,
-            404,
-            None,
-            format!("Route {} does not exists\r\n", path).as_bytes(),
-        )
-    }
+fn send_not_found(stream: TcpStream, path: String) -> Result<(), HttpError> {
+    fixed_response(
+        &stream,
+        404,
+        None,
+        format!("Route {} does not exists\r\n", path).as_bytes(),
+    )
+}
 
-    fn send_broken_chunk(&self, stream: TcpStream) -> Result<(), HttpError> {
-        self.fixed_response(&stream, 400, None, "Invalid chunk encoding\r\n".as_bytes())
-    }
+fn send_broken_chunk(stream: TcpStream) -> Result<(), HttpError> {
+    fixed_response(&stream, 400, None, "Invalid chunk encoding\r\n".as_bytes())
+}
 
-    fn stream_response(
-        &self,
-        mut stream: &TcpStream,
-        status: u32,
-        headers: Option<HashMap<String, String>>,
-        mut body: Box<dyn Streamable>,
-    ) -> Result<(), HttpError> {
-        let start = format!(
-            "HTTP/1.1 {} {}\r\nConnection: Close\r\nTransfer-Encoding: chunked\r\n",
-            status,
-            status_text(status),
-        );
-        stream.write_all(start.as_bytes())?;
+fn stream_response(
+    mut stream: &TcpStream,
+    status: u32,
+    headers: Option<HashMap<String, String>>,
+    mut body: Box<dyn Streamable>,
+) -> Result<(), HttpError> {
+    let start = format!(
+        "HTTP/1.1 {} {}\r\nConnection: Close\r\nTransfer-Encoding: chunked\r\n",
+        status,
+        status_text(status),
+    );
+    stream.write_all(start.as_bytes())?;
 
-        if let Some(headers) = headers {
-            for (key, value) in headers {
-                stream.write_all(format!("{}: {}\r\n", key, value).as_bytes())?;
-            }
+    if let Some(headers) = headers {
+        for (key, value) in headers {
+            stream.write_all(format!("{}: {}\r\n", key, value).as_bytes())?;
         }
+    }
 
-        let trailer_names = body.trailer_names();
-        let has_trailers = !trailer_names.is_empty();
-        if has_trailers {
-            stream.write_all(format!("Trailers: {}\r\n", trailer_names.join(",")).as_bytes())?;
-        }
+    let trailer_names = body.trailer_names();
+    let has_trailers = !trailer_names.is_empty();
+    if has_trailers {
+        stream.write_all(format!("Trailers: {}\r\n", trailer_names.join(",")).as_bytes())?;
+    }
+    stream.write_all("\r\n".as_bytes())?;
+    stream.flush()?;
+
+    for data in body.by_ref() {
+        let chunk_head = format!("{:x}\r\n", data.len());
+        stream.write_all(chunk_head.as_bytes())?;
+        stream.write_all(&data)?;
         stream.write_all("\r\n".as_bytes())?;
         stream.flush()?;
-
-        for data in body.by_ref() {
-            let chunk_head = format!("{:x}\r\n", data.len());
-            stream.write_all(chunk_head.as_bytes())?;
-            stream.write_all(&data)?;
-            stream.write_all("\r\n".as_bytes())?;
-            stream.flush()?;
-        }
-
-        stream.write_all("0\r\n".as_bytes())?;
-        if has_trailers {
-            let trailers = body.trailers();
-            for trailer in trailers {
-                stream.write_all(format!("{}: {}\r\n", trailer.0, trailer.1).as_bytes())?;
-            }
-        }
-        stream.write_all("\r\n".as_bytes())?;
-        stream.flush()?;
-
-        Ok(())
     }
 
-    fn fixed_response(
-        &self,
-        mut stream: &TcpStream,
-        status: u32,
-        headers: Option<HashMap<String, String>>,
-        body: &[u8],
-    ) -> Result<(), HttpError> {
-        let start = format!(
-            "HTTP/1.1 {} {}\r\nConnection: Close\r\nContent-Length: {}\r\n",
-            status,
-            status_text(status),
-            body.len()
-        );
-        stream.write_all(start.as_bytes())?;
-        if let Some(headers) = headers {
-            for (key, value) in headers {
-                stream.write_all(format!("{}: {}\r\n", key, value).as_bytes())?;
-            }
+    stream.write_all("0\r\n".as_bytes())?;
+    if has_trailers {
+        let trailers = body.trailers();
+        for trailer in trailers {
+            stream.write_all(format!("{}: {}\r\n", trailer.0, trailer.1).as_bytes())?;
         }
-        stream.write_all("\r\n".as_bytes())?;
-        stream.write_all(body)?;
-        stream.flush()?;
-
-        Ok(())
     }
+    stream.write_all("\r\n".as_bytes())?;
+    stream.flush()?;
+
+    Ok(())
+}
+
+fn fixed_response(
+    mut stream: &TcpStream,
+    status: u32,
+    headers: Option<HashMap<String, String>>,
+    body: &[u8],
+) -> Result<(), HttpError> {
+    let start = format!(
+        "HTTP/1.1 {} {}\r\nConnection: Close\r\nContent-Length: {}\r\n",
+        status,
+        status_text(status),
+        body.len()
+    );
+    stream.write_all(start.as_bytes())?;
+    if let Some(headers) = headers {
+        for (key, value) in headers {
+            stream.write_all(format!("{}: {}\r\n", key, value).as_bytes())?;
+        }
+    }
+    stream.write_all("\r\n".as_bytes())?;
+    stream.write_all(body)?;
+    stream.flush()?;
+
+    Ok(())
 }
 
 pub struct SpawnedRestServer {
