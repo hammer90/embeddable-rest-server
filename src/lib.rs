@@ -530,7 +530,7 @@ impl<T> RestServer<T> {
             .map_err(|_| ResponseableError::InvalidLength)
     }
 
-    fn handle_connection(&self, stream: &TcpStream) -> Result<(), HttpError> {
+    fn handle_connection(&self, mut stream: &TcpStream) -> Result<(), HttpError> {
         if let Some(timeout) = self.read_timeout {
             stream.set_read_timeout(Some(timeout))?;
         }
@@ -553,6 +553,12 @@ impl<T> RestServer<T> {
         let headers = parse_headers(&mut reader)?;
         let len = self.extract_length(&headers)?;
         let trailers = headers.get("trailers").map(|x| x.to_owned());
+        if let Some(expect) = headers.get("expect") {
+            if expect == "100-continue" {
+                let continue_text = "HTTP/1.1 100 Continue\r\n\r\n";
+                stream.write_all(continue_text.as_bytes())?;
+            }
+        }
 
         let resp = match route.0 {
             RouteWithoutVerb::NoDate(func) => func(

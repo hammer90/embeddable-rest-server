@@ -1,14 +1,12 @@
 mod common;
 use std::{collections::HashMap, sync::Arc};
 
-use common::{get, get_header, post, send_raw, start_server};
+use common::{get, get_header, post, put_chunked, send_raw, start_server};
 use embeddable_rest_server::{
     BodyType, CancelHandler, CollectingHandler, HandlerResult, RequestHandler, Response, Route,
     Streamable,
 };
 use isahc::{http::header::CACHE_CONTROL, ReadResponseExt, ResponseExt};
-
-use crate::common::put_chunked;
 
 #[test]
 fn not_found() {
@@ -521,4 +519,25 @@ fn with_context() {
 
     assert_eq!(res.status(), 200);
     assert_eq!(res.text().unwrap(), "path: 'foo'\r\n");
+}
+
+#[test]
+fn expect_continue() {
+    let (port, _server) = start_server(
+        vec![(
+            "/to-be-continued".to_string(),
+            Route::PUT(|req, context| {
+                CollectingHandler::new(req, context, |_, _, data| {
+                    assert_eq!(std::str::from_utf8(data.as_ref()).unwrap(), "Hello Data");
+                    Response::fixed_string(200, None, "continued\r\n")
+                })
+            }),
+        )],
+        1024,
+        42,
+    );
+
+    let res = send_raw(port, "PUT /to-be-continued HTTP/1.1\r\nContent-Length: 10\r\nExpect: 100-continue\r\n\r\nHello Data\r\n");
+
+    assert_eq!(res, "HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nConnection: Close\r\nContent-Length: 11\r\n\r\ncontinued\r\n");
 }
