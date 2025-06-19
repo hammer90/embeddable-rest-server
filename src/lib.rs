@@ -276,6 +276,16 @@ impl<T> RequestHandler for DiscardingHandler<T> {
     }
 }
 
+#[macro_export]
+macro_rules! handle_result {
+    ($func:expr) => {
+        |req, context| match $func(req, context) {
+            Ok(response) => response,
+            Err(response) => response,
+        }
+    };
+}
+
 pub type RouteFn<T> = fn(req: Request, context: Arc<T>) -> Box<dyn RequestHandler>;
 pub type RouteFnWithoutData<T> = fn(req: Request, context: Arc<T>) -> Response;
 

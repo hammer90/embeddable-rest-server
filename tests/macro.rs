@@ -1,7 +1,11 @@
 mod common;
 
-use common::start_server;
-use embeddable_rest_server::{collect_body, collect_body_limit, discard_body, Response, Route};
+use std::sync::Arc;
+
+use common::{get, start_server};
+use embeddable_rest_server::{
+    collect_body, collect_body_limit, discard_body, handle_result, Request, Response, Route,
+};
 use isahc::ReadResponseExt;
 
 use crate::common::put_chunked;
@@ -72,4 +76,25 @@ fn discard_macro() {
 
     assert_eq!(res.status(), 200);
     assert_eq!(res.text().unwrap(), "body has been discarded\r\n");
+}
+
+fn build_result(_: Request, _: Arc<i32>) -> Result<Response, Response> {
+    Ok(Response::fixed_string(200, None, "result\r\n"))
+}
+
+#[test]
+fn handle_result_macro() {
+    let (port, _server) = start_server(
+        vec![(
+            "/result".to_string(),
+            Route::GET(handle_result!(build_result)),
+        )],
+        1024,
+        42,
+    );
+
+    let mut res = get(port, "/result");
+
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.text().unwrap(), "result\r\n");
 }
