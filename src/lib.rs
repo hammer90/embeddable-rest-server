@@ -5,6 +5,7 @@ mod status_text;
 
 use std::collections::HashMap;
 use std::error::Error as StdError;
+use std::fmt::Display;
 use std::io::{prelude::*, BufReader, Error as IoError};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
@@ -34,18 +35,19 @@ pub enum HttpError {
     RouteExists,
     IO(IoError),
     Responseable(ResponseableError),
-    Std,
+}
+
+impl StdError for HttpError {}
+
+impl Display for HttpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 impl From<IoError> for ResponseableError {
     fn from(_: IoError) -> ResponseableError {
         ResponseableError::IO
-    }
-}
-
-impl From<Box<dyn StdError>> for HttpError {
-    fn from(_: Box<dyn StdError>) -> HttpError {
-        HttpError::Std
     }
 }
 
