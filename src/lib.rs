@@ -175,6 +175,7 @@ pub struct CollectingHandler<T> {
     req: Request,
     data: Vec<u8>,
     context: T,
+    limit: Option<usize>,
 }
 
 impl<T> CollectingHandler<T> {
@@ -184,6 +185,22 @@ impl<T> CollectingHandler<T> {
             req,
             data: vec![],
             context,
+            limit: None,
+        })
+    }
+
+    pub fn new_limit(
+        req: Request,
+        context: T,
+        limit: usize,
+        route: CollectedRoute<T>,
+    ) -> Box<Self> {
+        Box::new(Self {
+            route,
+            req,
+            data: vec![],
+            context,
+            limit: Some(limit),
         })
     }
 }
@@ -195,14 +212,65 @@ macro_rules! collect_body {
     };
 }
 
+#[macro_export]
+macro_rules! collect_body_limit {
+    ($limit:expr,$route:expr) => {
+        |req, context| $crate::CollectingHandler::new_limit(req, context, $limit, $route);
+    };
+}
+
 impl<T> RequestHandler for CollectingHandler<T> {
     fn chunk(&mut self, mut chunk: Vec<u8>) -> HandlerResult {
+        if let Some(limit) = self.limit {
+            if self.data.len() + chunk.len() > limit {
+                return HandlerResult::Abort(Response::fixed_string(
+                    413,
+                    None,
+                    &format!("Max payload size {} exceeded\r\n", limit),
+                ));
+            }
+        }
         self.data.append(&mut chunk);
         HandlerResult::Continue
     }
 
     fn end(&mut self, _: Option<HashMap<String, String>>) -> Response {
         (self.route)(&self.req, &self.context, &self.data)
+    }
+}
+
+pub type DiscardedRoute<T> = fn(req: &Request, context: &T) -> Response;
+
+pub struct DiscardingHandler<T> {
+    route: DiscardedRoute<T>,
+    req: Request,
+    context: T,
+}
+
+impl<T> DiscardingHandler<T> {
+    pub fn new(req: Request, context: T, route: DiscardedRoute<T>) -> Box<Self> {
+        Box::new(Self {
+            route,
+            req,
+            context,
+        })
+    }
+}
+
+#[macro_export]
+macro_rules! discard_body {
+    ($route:expr) => {
+        |req, context| $crate::DiscardingHandler::new(req, context, $route);
+    };
+}
+
+impl<T> RequestHandler for DiscardingHandler<T> {
+    fn chunk(&mut self, _chunk: Vec<u8>) -> HandlerResult {
+        HandlerResult::Continue
+    }
+
+    fn end(&mut self, _: Option<HashMap<String, String>>) -> Response {
+        (self.route)(&self.req, &self.context)
     }
 }
 
