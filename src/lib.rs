@@ -170,21 +170,21 @@ impl RequestHandler for CancelHandler {
     }
 }
 
-pub type CollectedRoute<T> = fn(req: &Request, context: &T, data: &[u8]) -> Response;
+pub type CollectedRoute<T> = fn(req: Request, context: Arc<T>, data: &[u8]) -> Response;
 
 pub struct CollectingHandler<T> {
     route: CollectedRoute<T>,
-    req: Request,
+    req: Option<Request>,
     data: Vec<u8>,
-    context: T,
+    context: Arc<T>,
     limit: Option<usize>,
 }
 
 impl<T> CollectingHandler<T> {
-    pub fn new(req: Request, context: T, route: CollectedRoute<T>) -> Box<Self> {
+    pub fn new(req: Request, context: Arc<T>, route: CollectedRoute<T>) -> Box<Self> {
         Box::new(Self {
             route,
-            req,
+            req: Some(req),
             data: vec![],
             context,
             limit: None,
@@ -193,13 +193,13 @@ impl<T> CollectingHandler<T> {
 
     pub fn new_limit(
         req: Request,
-        context: T,
+        context: Arc<T>,
         limit: usize,
         route: CollectedRoute<T>,
     ) -> Box<Self> {
         Box::new(Self {
             route,
-            req,
+            req: Some(req),
             data: vec![],
             context,
             limit: Some(limit),
@@ -237,23 +237,28 @@ impl<T> RequestHandler for CollectingHandler<T> {
     }
 
     fn end(&mut self, _: Option<HashMap<String, String>>) -> Response {
-        (self.route)(&self.req, &self.context, &self.data)
+        if let Some(req) = self.req.take() {
+            (self.route)(req, self.context.clone(), &self.data)
+        } else {
+            // this is only hypothetically, end is never called twice...
+            Response::fixed_string(500, None, "RequestHandler::end called multiple times")
+        }
     }
 }
 
-pub type DiscardedRoute<T> = fn(req: &Request, context: &T) -> Response;
+pub type DiscardedRoute<T> = fn(req: Request, context: Arc<T>) -> Response;
 
 pub struct DiscardingHandler<T> {
     route: DiscardedRoute<T>,
-    req: Request,
-    context: T,
+    req: Option<Request>,
+    context: Arc<T>,
 }
 
 impl<T> DiscardingHandler<T> {
-    pub fn new(req: Request, context: T, route: DiscardedRoute<T>) -> Box<Self> {
+    pub fn new(req: Request, context: Arc<T>, route: DiscardedRoute<T>) -> Box<Self> {
         Box::new(Self {
             route,
-            req,
+            req: Some(req),
             context,
         })
     }
@@ -272,7 +277,12 @@ impl<T> RequestHandler for DiscardingHandler<T> {
     }
 
     fn end(&mut self, _: Option<HashMap<String, String>>) -> Response {
-        (self.route)(&self.req, &self.context)
+        if let Some(req) = self.req.take() {
+            (self.route)(req, self.context.clone())
+        } else {
+            // this is only hypothetically, end is never called twice...
+            Response::fixed_string(500, None, "RequestHandler::end called multiple times")
+        }
     }
 }
 
