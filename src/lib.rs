@@ -300,7 +300,7 @@ macro_rules! handle_result {
 pub type RouteFn<T> = fn(req: Request, context: Arc<T>) -> Box<dyn RequestHandler>;
 pub type RouteFnWithoutData<T> = fn(req: Request, context: Arc<T>) -> Response;
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum Route<T> {
     GET(RouteFnWithoutData<T>),
     POST(RouteFn<T>),
