@@ -13,6 +13,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use headers::parse_headers;
+use log::{error, info, warn};
 use parsed_first_line::ParsedFirstLine;
 use routes::{Routes, RoutesError};
 use status_text::status_text;
@@ -458,13 +459,13 @@ impl<T> RestServer<T> {
         let stop = self.shutdown.clone();
         for stream in self.listener.incoming() {
             if *stop.lock().unwrap() {
-                println!("shutting down");
+                info!("shutting down");
                 break;
             }
             if let Ok(stream) = stream {
                 let result = self.handle_connection_witherrors(stream);
                 if let Err(err) = result {
-                    println!("{:?}", err);
+                    error!("Error during request handling: {}", err);
                 }
             }
         }
@@ -657,7 +658,7 @@ impl<T> RestServer<T> {
             return Err(ResponseableError::BrokenChunk);
         }
         usize::from_str_radix(&len[..count - 2], 16).map_err(|e| {
-            println!("{}", e);
+            warn!("Invalid chunk len: {}", e);
             ResponseableError::BrokenChunk
         })
     }

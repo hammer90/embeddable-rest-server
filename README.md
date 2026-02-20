@@ -10,7 +10,6 @@ The primary focus is a stateless RESTful server, thus HTTP/2 features like State
 * chunked transfers
     * incoming request are additionally split to met the configured size limit
     * sending of HTTP trailers (note that many HTTP clients ignore them)
-* as of commit `7e221b93e` only dev-dependencies are needed (even if this was never a goal)
 
 ## Missing but planned Features
 
