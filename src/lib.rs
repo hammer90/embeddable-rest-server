@@ -468,6 +468,10 @@ impl<T> RestServer<T> {
                     error!("Error during request handling: {}", err);
                 }
             }
+            if *stop.lock().unwrap() {
+                info!("shutting down");
+                break;
+            }
         }
         Ok(())
     }
