@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::error::Error as StdError;
 use std::fmt::Display;
 use std::io::{prelude::*, BufReader, Error as IoError};
-use std::net::{TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -422,8 +422,6 @@ pub struct RestServer<T> {
     shutdown: Arc<Mutex<bool>>,
     buf_size: usize,
     context: Arc<T>,
-    addr: String,
-    port: u16,
     read_timeout: Option<Duration>,
 }
 
@@ -443,8 +441,6 @@ impl<T> RestServer<T> {
             shutdown,
             buf_size,
             context: Arc::new(context),
-            addr,
-            port,
             read_timeout,
         })
     }
@@ -453,6 +449,10 @@ impl<T> RestServer<T> {
         self.listener
             .local_addr()
             .map(|local_addr| local_addr.port())
+    }
+
+    pub fn local_addr(&self) -> Result<SocketAddr, IoError> {
+        self.listener.local_addr()
     }
 
     pub fn start(self) -> Result<(), HttpError> {
@@ -834,8 +834,7 @@ fn fixed_response(
 pub struct SpawnedRestServer {
     _handle: JoinHandle<Result<(), HttpError>>,
     stop: Arc<Mutex<bool>>,
-    addr: String,
-    port: u16,
+    addr: SocketAddr,
 }
 
 impl SpawnedRestServer {
@@ -844,15 +843,17 @@ impl SpawnedRestServer {
         stack_size: usize,
     ) -> Result<Self, HttpError> {
         let stop = server.shutdown.clone();
-        let builder = thread::Builder::new().stack_size(stack_size);
-        let addr = server.addr.to_owned();
-        let port = server.port;
+        let builder = thread::Builder::new()
+            .name("SpawnedRestServer".into())
+            .stack_size(stack_size);
+        let addr = server
+            .local_addr()
+            .expect("TcpListener.local_addr() should work");
         let handle = builder.spawn(move || server.start())?;
         Ok(SpawnedRestServer {
             _handle: handle,
             stop,
             addr,
-            port,
         })
     }
 
@@ -870,7 +871,8 @@ impl SpawnedRestServer {
 impl Drop for SpawnedRestServer {
     fn drop(&mut self) {
         self.stop();
-        let _ = TcpStream::connect(format!("{}:{}", self.addr, self.port).as_str());
+        // initiate a TCP connection to release the worker thread form the .accept(), might run into aa timeout
+        let _ = TcpStream::connect_timeout(&self.addr, Duration::from_millis(500));
     }
 }
 
